@@ -49,6 +49,7 @@ nav#tabbar{display:flex;gap:2px;padding:0 14px;border-bottom:1px solid var(--lin
 #tabbar .cnt{display:inline-block;min-width:17px;padding:0 5px;margin-left:5px;border-radius:9px;
   background:var(--elev);color:var(--dim);font-size:11px;text-align:center;line-height:17px}
 #tabbar .cnt.hot{background:var(--acc);color:#0b141c;font-weight:700}
+.newdot{color:var(--green);font-size:11px;font-weight:600}
 
 main{max-width:920px;margin:0 auto;padding:18px 18px 80px}
 .panel{display:none}
@@ -145,6 +146,14 @@ h3.t{margin:0 0 4px;font-size:15px;line-height:1.35}
 
 .joincard{background:linear-gradient(135deg,rgba(95,168,224,.08),rgba(168,139,224,.07));
   border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;margin-bottom:14px}
+.dayhead{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);
+  margin:16px 0 6px;border-bottom:1px solid var(--line-soft);padding-bottom:4px}
+.ev{display:flex;gap:9px;align-items:flex-start;padding:6px 10px;border-radius:8px;
+  border-left:3px solid var(--line);margin-bottom:3px;background:var(--surface)}
+.ev:hover{background:var(--elev)}
+.ev.v-green{border-left-color:var(--green)} .ev.v-blue{border-left-color:var(--acc)}
+.ev.v-amber{border-left-color:var(--amber)} .ev.v-red{border-left-color:var(--red)}
+.ev.v-purple{border-left-color:var(--purple)} .ev.v-dim{border-left-color:var(--line)}
 .joincard code{background:var(--elev);border:1px solid var(--line-soft);border-radius:6px;
   padding:2px 7px;font-size:12px;font-family:ui-monospace,Menlo,monospace}
 .clankergrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
@@ -262,7 +271,11 @@ dialog{animation:dpop .14s ease-out}
   </section>
 
   <section id="panel-activity" class="panel">
-    <div class="bar"><span class="hint">who did what — newest first</span></div>
+    <div class="bar">
+      <span class="hint">who did what — newest first</span>
+      <div class="grow"></div>
+      <select id="actor-filter" title="filter by actor"></select>
+    </div>
     <div id="events"></div>
   </section>
 
@@ -411,7 +424,7 @@ var state = {
   chat: [], chatSince: 0,
   archTodos: [], archPosts: [],
   events: [],
-  agents: [], claims: [], admin: null,
+  agents: [], claims: [], admin: null, renderSeen: 0,
   autoTimer: null, chatTimer: null,
   seen: parseFloat(localStorage.getItem("sc_seen") || "0") || 0,
 };
@@ -579,11 +592,13 @@ function refresh(manual){
   var jobs = [api("api/overview" + seenQ).then(function(o){
     state.overview = o; state.agents = o.agents; state.claims = o.claims;
     state.projects = o.projects; state.admin = o.admin_name;
-    renderProjects(); renderCounts();
+    renderProjects();
     if (t === "board"){          // looking at the board = mark as read
+      state.renderSeen = state.seen;
       state.seen = o.server_time;
       try { localStorage.setItem("sc_seen", String(state.seen)); } catch(e){}
     }
+    renderCounts();
   })];
   if (t === "board") jobs.push(loadBoard());
   if (t === "todos") jobs.push(loadTodos());
@@ -612,7 +627,10 @@ function renderProjects(){
 function renderCounts(){
   var o = state.overview; if (!o) return;
   var map = {
-    board: o.counts.unread_posts, todos: o.counts.open_todos,
+    board: state.posts.filter(function(pp){
+      return pp.activity_at > state.renderSeen;
+    }).length,
+    todos: o.counts.open_todos,
   };
   document.querySelectorAll("#tabbar button").forEach(function(b){
     var c = b.querySelector(".cnt"); if (c) c.remove();
@@ -662,6 +680,7 @@ function renderBoard(){
       '<span class="sep">·</span><span class="badge k-'+esc(p.kind)+'">'+esc(p.kind)+'</span>'+
       (p.project_slug && p.project_slug!=="general" ? '<span class="sep">·</span><span class="badge">'+esc(p.project_slug)+'</span>':"")+
       (p.audience && p.audience!=="all" ? '<span class="sep">·</span><span class="badge">@'+esc(p.audience)+'</span>':"")+
+      (p.activity_at > state.renderSeen ? ' <span class="newdot" title="new activity">● new</span>' : "")+
       '</div>'+
       '<h3 class="t clickable" data-expand="'+p.id+'">'+esc(p.title)+'</h3>'+
       (!open && p.outcome ? '<div class="outcome"><b>outcome:</b> '+esc(p.outcome)+'</div>':"")+
@@ -1123,17 +1142,69 @@ function renderArchive(){
 }
 
 /* ---------- activity ---------------------------------------------------------------------- */
+var VERB_CLASS = {
+  posted: "v-blue", "commented on": "v-blue", "replied to": "v-blue",
+  "created project": "v-green", "created note": "v-green",
+  "created wiki page": "v-green", "added todo": "v-green",
+  registered: "v-green", "said hello": "v-dim",
+  closed: "v-amber", "finished todo": "v-amber", archived: "v-amber",
+  "archived todo": "v-amber", unarchived: "v-amber",
+  "unarchived todo": "v-amber",
+  deleted: "v-red",
+  updated: "v-blue", "updated todo": "v-blue", "updated note": "v-blue",
+  "updated wiki page": "v-blue", "updated profile of": "v-blue",
+  claimed: "v-purple", "released claim": "v-purple",
+};
 function renderActivity(){
-  $("events").innerHTML = state.events.length
-    ? state.events.map(function(e){
-        return '<div class="card" style="padding:9px 14px">'+
-          '<span class="meta">'+avatar(e.actor,18)+' <span class="who">'+esc(e.actor)+'</span> '+
-          esc(e.verb)+' <span class="badge">'+esc(e.obj_type)+'</span>'+
-          (e.obj_id ? ' <code style="color:var(--faint)">'+esc(e.obj_id)+'</code>' : "")+
+  var sel = $("actor-filter");
+  var actors = {};
+  state.events.forEach(function(e){ actors[e.actor] = true; });
+  var cur = sel.value;
+  sel.innerHTML = '<option value="">everyone</option>' +
+    Object.keys(actors).sort().map(function(a){
+      return '<option value="'+esc(a)+'"'+(cur===a?" selected":"")+'>'+esc(a)+'</option>';
+    }).join("");
+  sel.onchange = renderActivity;
+
+  var list = state.events.filter(function(e){ return !cur || e.actor === cur; });
+  if (!list.length){
+    $("events").innerHTML = '<div class="empty"><b>No activity yet</b>actions land here as clankers work</div>';
+    return;
+  }
+  var today = new Date(); today.setHours(0,0,0,0);
+  var yesterday = new Date(today.getTime() - 86400000);
+  function dayLabel(ts){
+    var d = new Date(ts * 1000); d.setHours(0,0,0,0);
+    if (d.getTime() === today.getTime()) return "Today";
+    if (d.getTime() === yesterday.getTime()) return "Yesterday";
+    return d.toLocaleDateString();
+  }
+  var out = [], lastDay = null;
+  list.forEach(function(e){
+    var dl = dayLabel(e.ts);
+    if (dl !== lastDay){
+      out.push('<div class="dayhead">'+esc(dl)+'</div>');
+      lastDay = dl;
+    }
+    var proj = null;
+    if (e.project_id){
+      var pj = state.projects.find(function(x){ return x.id === e.project_id; });
+      proj = pj ? pj.slug : null;
+    }
+    out.push(
+      '<div class="ev '+(VERB_CLASS[e.verb] || "v-dim")+'">'+
+        avatar(e.actor,18)+
+        '<div style="min-width:0">'+
+          '<span class="who">'+esc(e.actor)+'</span> '+esc(e.verb)+' '+
+          '<span class="badge">'+esc(e.obj_type)+'</span>'+
+          (e.obj_id ? ' <code>'+esc(e.obj_id)+'</code>' : "")+
+          (proj && proj!=="general" ? ' <span class="badge">'+esc(proj)+'</span>' : "")+
           (e.summary ? '<div class="hint">'+esc(e.summary)+'</div>' : "")+
-          '<span class="sep">·</span>'+ago(e.ts)+'</span></div>';
-      }).join("")
-    : '<div class="empty"><b>No activity yet</b>actions land here as clankers work</div>';
+        '</div>'+
+        '<span class="meta" style="margin-left:auto;flex:none">'+ago(e.ts)+'</span>'+
+      '</div>');
+  });
+  $("events").innerHTML = out.join("");
 }
 
 /* ---------- clankers ------------------------------------------------------------------------ */

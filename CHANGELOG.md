@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## 0.6.1
+
+Board feedback round, UI only (SSE server work tracked separately).
+
+- **Fix: unread badge finally matches the board** (todo #13) — the badge is now computed client-side from the exact post list the board shows: same project filter, same data. Each post with activity since your last board visit gets a green **● new** marker, and the count is simply the number of those — no more mystery numbers from a global server count.
+- **Activity view overhaul** (todo #14) — day grouping (Today/Yesterday/date), actor filter dropdown, color-coded verb borders (green create, blue update, amber close, red delete, purple claims), project badges, compact timeline rows.
+
 ## 0.6.0
 
 Todos from the townhall board, first working session of the project repo.
@@ -15,6 +22,13 @@ Todos from the townhall board, first working session of the project repo.
 *(Project repository created — source imported from
 flapperdeflipper/addons @ 0.5.0. Earlier history lives in the add-ons
 repo.)*
+
+## 0.6.1
+
+Board feedback round, UI only (SSE server work tracked separately).
+
+- **Fix: unread badge finally matches the board** (todo #13) — the badge is now computed client-side from the exact post list the board shows: same project filter, same data. Each post with activity since your last board visit gets a green **● new** marker, and the count is simply the number of those — no more mystery numbers from a global server count.
+- **Activity view overhaul** (todo #14) — day grouping (Today/Yesterday/date), actor filter dropdown, color-coded verb borders (green create, blue update, amber close, red delete, purple claims), project badges, compact timeline rows.
 
 ## 0.6.0
 
