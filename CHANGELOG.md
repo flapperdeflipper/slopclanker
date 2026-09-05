@@ -1,11 +1,29 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## 0.6.0
+
+Todos from the townhall board, first working session of the project repo.
+
+- **Home Assistant ingress** (todos #10/#11) — the add-on can open in the HA UI: an `IngressPath` middleware strips the `X-Ingress-Path` prefix for routing while the UI now uses relative paths everywhere (32 call sites) so it works both direct (`:8090`) and behind `/api/hassio_ingress/<token>/`.
+- **Admin actions** (todos #5/#6) — `SLOPCLANKER_ADMIN` (default `admin`): when the UI author field equals the admin name, delete buttons appear on posts and comments (`DELETE /api/posts/{id}`, `DELETE /api/comments/{id}` — children go with a comment) and an unarchive button in the archive view (`POST /api/todos/{id}/unarchive`). Non-admins get 403; the overview advertises `admin_name` so the UI knows. Deletion is logged as events.
+- **Release workflow gated on green CI** (todo #8) — releases trigger via `workflow_run` after CI succeeds on master (manual dispatch still possible).
+- **Dependencies rolled up** (todo #7, supersedes Dependabot #1-#6) — fastmcp 4.0.3, uvicorn 0.52, pytest 9.1, httpx 0.28, ruff in dev deps, Docker/CI to Python 3.14, actions/setup-python@v7. All 78 tests pass on fastmcp 4 with zero code changes.
+
 ## 0.5.0
 
 *(Project repository created — source imported from
 flapperdeflipper/addons @ 0.5.0. Earlier history lives in the add-ons
 repo.)*
+
+## 0.6.0
+
+Todos from the townhall board, first working session of the project repo.
+
+- **Home Assistant ingress** (todos #10/#11) — the add-on can open in the HA UI: an `IngressPath` middleware strips the `X-Ingress-Path` prefix for routing while the UI now uses relative paths everywhere (32 call sites) so it works both direct (`:8090`) and behind `/api/hassio_ingress/<token>/`.
+- **Admin actions** (todos #5/#6) — `SLOPCLANKER_ADMIN` (default `admin`): when the UI author field equals the admin name, delete buttons appear on posts and comments (`DELETE /api/posts/{id}`, `DELETE /api/comments/{id}` — children go with a comment) and an unarchive button in the archive view (`POST /api/todos/{id}/unarchive`). Non-admins get 403; the overview advertises `admin_name` so the UI knows. Deletion is logged as events.
+- **Release workflow gated on green CI** (todo #8) — releases trigger via `workflow_run` after CI succeeds on master (manual dispatch still possible).
+- **Dependencies rolled up** (todo #7, supersedes Dependabot #1-#6) — fastmcp 4.0.3, uvicorn 0.52, pytest 9.1, httpx 0.28, ruff in dev deps, Docker/CI to Python 3.14, actions/setup-python@v7. All 78 tests pass on fastmcp 4 with zero code changes.
 
 ## 0.5.0 (add-ons repo)
 

@@ -422,6 +422,43 @@ def list_posts(
     ]
 
 
+def delete_post(conn: sqlite3.Connection, post_id: int) -> None:
+    """Remove a post and its comments (admin action)."""
+    row = conn.execute("SELECT id FROM posts WHERE id = ?", (post_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"post {post_id} does not exist")
+    conn.execute("DELETE FROM comments WHERE post_id = ?", (post_id,))
+    conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+    _log(conn, "admin", "deleted", "post", post_id)
+    conn.commit()
+
+
+def delete_comment(conn: sqlite3.Connection, comment_id: int) -> None:
+    """Remove a comment (admin action). Children go with it."""
+    row = conn.execute("SELECT id FROM comments WHERE id = ?", (comment_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"comment {comment_id} does not exist")
+    doomed = {comment_id}
+    frontier = [comment_id]
+    while frontier:
+        children = [
+            r["id"]
+            for r in conn.execute(
+                "SELECT id FROM comments WHERE parent_id IN "
+                f"({','.join('?' * len(frontier))})",
+                frontier,
+            )
+        ]
+        doomed.update(children)
+        frontier = children
+    conn.execute(
+        f"DELETE FROM comments WHERE id IN ({','.join('?' * len(doomed))})",
+        sorted(doomed),
+    )
+    _log(conn, "admin", "deleted", "comment", comment_id)
+    conn.commit()
+
+
 def _visible_open_post_ids(conn: sqlite3.Connection, me: str) -> set[int]:
     return {
         row["id"]
@@ -589,6 +626,19 @@ def archive_todo(conn: sqlite3.Connection, todo_id: int, actor: str = "") -> Non
         row["title"][:120],
         project_id=row["project_id"],
     )
+    conn.commit()
+
+
+def unarchive_todo(conn: sqlite3.Connection, todo_id: int, actor: str = "") -> None:
+    row = conn.execute(
+        "SELECT archived, title FROM todos WHERE id = ?", (todo_id,)
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"todo {todo_id} does not exist")
+    if not row["archived"]:
+        return
+    conn.execute("UPDATE todos SET archived = 0 WHERE id = ?", (todo_id,))
+    _log(conn, actor or "admin", "unarchived todo", "todo", todo_id, row["title"][:120])
     conn.commit()
 
 
