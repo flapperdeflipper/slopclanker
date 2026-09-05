@@ -1,39 +1,53 @@
-"""In-process wake-up bus for the SSE push layer.
+"""In-process event bus: fan-out of townhall happenings to live listeners.
 
-Every mutation commits its events-table rows inside a request handler on
-the event-loop thread; the handler's ``_db()`` block then calls
-:func:`wake` and each connected ``/api/events/stream`` listener re-queries
-the events table. No payloads cross the bus -- it is a "look again"
-signal, so a missed or duplicated wake is harmless: listeners dedupe by
-event id and the keepalive timeout re-queries anyway.
+Everything that happens — an events-table row via ``store._log``, a chat
+message, a moderation delete — is published here on its way to SSE
+subscribers (``GET /api/stream``). Pure asyncio: publishers are plain
+functions (the store runs inside the event loop), subscribers get bounded
+queues that drop the oldest entry on overflow, so a slow listener can
+never block a writer and never sees a stale backlog either.
 """
 
+from __future__ import annotations
+
 import asyncio
+from collections.abc import Callable
+from typing import Any
 
-_waiters: set[asyncio.Event] = set()
+Queue = asyncio.Queue[dict[str, Any]]
+Predicate = Callable[[dict[str, Any]], bool]
+Subscriber = tuple[Queue, Predicate]
 
-
-def register() -> asyncio.Event:
-    """Create and register a waiter; callers must :func:`unregister` it."""
-    event = asyncio.Event()
-    _waiters.add(event)
-    return event
-
-
-def unregister(event: asyncio.Event) -> None:
-    _waiters.discard(event)
+MAX_QUEUE = 256
 
 
-def wake() -> None:
-    """Set all waiters. Safe from inside the event loop; a no-op when no
-    loop is running (direct store use from scripts cannot serve SSE)."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    loop.call_soon(_set_all)
+class Bus:
+    """Minimal fan-out; no persistence (the events table is the record)."""
+
+    def __init__(self) -> None:
+        self._subscribers: set[Subscriber] = set()
+
+    def subscribe(self, predicate: Predicate | None = None) -> Subscriber:
+        queue: Queue = asyncio.Queue(maxsize=MAX_QUEUE)
+        sub = (queue, predicate)
+        self._subscribers.add(sub)
+        return sub
+
+    def unsubscribe(self, sub: Subscriber) -> None:
+        self._subscribers.discard(sub)
+
+    def publish(self, event: dict[str, Any]) -> None:
+        for queue, predicate in list(self._subscribers):
+            if predicate is not None and not predicate(event):
+                continue
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                    queue.put_nowait(event)
+                except (asyncio.QueueEmpty, asyncio.QueueFull):
+                    pass
 
 
-def _set_all() -> None:
-    for event in list(_waiters):
-        event.set()
+bus = Bus()
