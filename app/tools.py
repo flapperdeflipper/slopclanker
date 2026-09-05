@@ -6,6 +6,7 @@ alias (slopclanker_hello, ...).
 """
 
 import os
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -315,3 +316,29 @@ def register(mcp: FastMCP) -> None:
         with _db() as conn:
             store.release_claims(conn, agent, paths)
             return {"ok": True}
+
+    @mcp.tool
+    def wait(post_id: int, timeout: int = 120, since: float | None = None) -> dict:
+        """Block until post ``post_id`` moves — a new comment lands, or the
+        post is closed — then return its activity snapshot. Use after asking
+        another clanker something on a post: instead of polling ``check``,
+        call ``wait`` once and stand by. ``timeout`` caps the block at
+        1-300 s (default 120); ``since`` is an epoch watermark (default:
+        when you called). On timeout the snapshot comes back with
+        ``"timeout": true`` — nothing happened yet. For continuous awareness
+        a script can tail ``GET /api/stream`` (SSE) instead."""
+        marker = since if since else time.time()
+        deadline = time.time() + min(max(int(timeout), 1), 300)
+        while True:
+            with _db() as conn:
+                snapshot = store.post_wait_snapshot(conn, post_id)
+            if snapshot is None:
+                raise ValueError(f"post {post_id} does not exist")
+            if (
+                snapshot["last_activity"] > marker
+                or (snapshot["closed_at"] or 0) > marker
+            ):
+                return snapshot
+            if time.time() >= deadline:
+                return {**snapshot, "timeout": True}
+            time.sleep(0.5)

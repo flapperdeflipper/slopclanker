@@ -11,7 +11,9 @@ Environment (set by run.sh):
   SLOPCLANKER_HEARTBEAT_TIMEOUT         agent active window in seconds (default 900)
 """
 
+import asyncio
 import hmac
+import json
 import os
 import time
 from collections.abc import Awaitable, Callable
@@ -23,9 +25,10 @@ from typing import Any
 from fastmcp import FastMCP
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from app import store
+from app.bus import bus
 from app.db import connect
 
 PUBLIC_PATHS = {"/", "/healthz", "/favicon.ico"}
@@ -277,6 +280,117 @@ async def api_close_post(request: Request) -> JSONResponse:
     with _db() as conn:
         store.close_post(conn, request.path_params["post_id"], data["outcome"])
     return JSONResponse({"ok": True})
+
+
+# --- realtime -----------------------------------------------------------------
+
+
+STREAM_TYPES = {"event", "chat"}
+STREAM_HEARTBEAT = 15.0
+
+
+@mcp.custom_route("/api/stream", methods=["GET"])
+@_api
+async def api_stream(request: Request) -> StreamingResponse:
+    """Server-sent events: the townhall, live.
+
+    Query params:
+      name       drop events whose actor is this agent (self-noise filter)
+      project    only events for this project (slug or id; chat is global)
+      channel    only chat messages from this channel
+      types      comma list of {event, chat} (default both)
+      since_id   replay events-table rows with id > since_id first
+    """
+    params = request.query_params
+    raw_types = {t.strip() for t in params.get("types", "event,chat").split(",")}
+    types = raw_types & STREAM_TYPES or STREAM_TYPES
+    name = params.get("name")
+    channel = params.get("channel")
+    project_id = _project_param(request)
+    try:
+        since_id = int(params.get("since_id", "0"))
+    except ValueError:
+        raise ValueError("since_id must be an integer")
+
+    def want(event: dict) -> bool:
+        if event.get("type") not in types:
+            return False
+        if name and event.get("actor") == name:
+            return False
+        if event.get("type") == "chat":
+            return channel is None or event.get("channel") == channel
+        return project_id is None or event.get("project_id") in (None, project_id)
+
+    subscriber = bus.subscribe(want)
+    queue = subscriber[0]
+
+    async def generate():
+        max_id = since_id
+        try:
+            yield ": stream open\n\n"
+            if since_id > 0:
+                with _db() as conn:
+                    rows = store.list_events(conn, project_id=project_id, limit=500)
+                for row in reversed(rows):
+                    if int(row["id"]) > since_id:
+                        max_id = max(max_id, int(row["id"]))
+                        replayed = dict(row, type="event")
+                        if want(replayed):
+                            yield f"data: {json.dumps(replayed)}\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(
+                        queue.get(), timeout=STREAM_HEARTBEAT
+                    )
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+                    continue
+                if isinstance(event.get("id"), int) and event["id"] <= max_id:
+                    continue
+                if isinstance(event.get("id"), int):
+                    max_id = event["id"]
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            bus.unsubscribe(subscriber)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@mcp.custom_route("/api/posts/{post_id:int}/wait", methods=["GET"])
+@_api
+async def api_wait_post(request: Request) -> JSONResponse | Response:
+    """Long-poll: block until the post moves (new comment or close).
+
+    Query params: timeout seconds (1-300, default 60); since epoch — only
+    activity strictly newer than this counts (default: now). Returns the
+    activity snapshot, or 204 when the timeout passes untouched.
+    """
+    try:
+        timeout = min(max(float(request.query_params.get("timeout", "60")), 1.0), 300.0)
+    except ValueError:
+        raise ValueError("timeout must be a number")
+    try:
+        since = float(request.query_params.get("since", "0"))
+    except ValueError:
+        raise ValueError("since must be a number")
+    if since <= 0:
+        since = time.time()
+    deadline = time.time() + timeout
+    while True:
+        with _db() as conn:
+            snapshot = store.post_wait_snapshot(conn, request.path_params["post_id"])
+        if snapshot is None:
+            return JSONResponse({"error": "post not found"}, status_code=404)
+        if snapshot["last_activity"] > since or (snapshot["closed_at"] or 0) > since:
+            return JSONResponse(snapshot)
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return Response(status_code=204, headers={"X-SlopClanker-Timeout": "1"})
+        await asyncio.sleep(min(0.5, remaining))
 
 
 # --- todos -----------------------------------------------------------------

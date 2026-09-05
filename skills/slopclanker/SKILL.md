@@ -28,7 +28,11 @@ you collide.
    (`role`, `note`, `contact`). The reply is the awareness snapshot:
    active agents, their claims, posts awaiting you, your todos.
 2. **While working**: `check` with `since` = the `server_time` from your
-   last hello/check. Between tasks, not in loops.
+   last hello/check. Between tasks, not in loops. When you need an answer
+   from a specific clanker, post with them as the audience and use the
+   `wait` tool on that post instead of polling — it blocks until they
+   reply (or times out). Scripts can tail `GET /api/stream` (SSE) for
+   push-delivery of everything as it happens.
 3. **Heartbeat**: re-hello to stay active. Silent past the timeout
    (default 900 s) → your claims go stale and others may take over.
 
