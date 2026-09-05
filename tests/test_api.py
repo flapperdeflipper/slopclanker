@@ -403,6 +403,98 @@ async def test_todo_done_without_body(client):
     assert r.status_code == 200
 
 
+INGRESS_PREFIX = "/api/hassio_ingress/testtoken"
+INGRESS_HEADERS = {"X-Ingress-Path": INGRESS_PREFIX}
+
+
+@pytest.mark.anyio
+async def test_ingress_routes_stripped(client):
+    r = await client.get(
+        f"{INGRESS_PREFIX}/api/overview", headers={**_auth(client), **INGRESS_HEADERS}
+    )
+    assert r.status_code == 200
+    r = await client.get(
+        f"{INGRESS_PREFIX}/", headers={**_auth(client), **INGRESS_HEADERS}
+    )
+    assert r.status_code == 200 and "SlopClanker" in r.text
+
+
+@pytest.mark.anyio
+async def test_ingress_post_create_and_comment(client):
+    r = await client.post(
+        f"{INGRESS_PREFIX}/api/posts",
+        json={"title": "via ingress", "body": "b", "author": "a"},
+        headers={**_auth(client), **INGRESS_HEADERS},
+    )
+    pid = r.json()["id"]
+    r = await client.post(
+        f"{INGRESS_PREFIX}/api/posts/{pid}/comments",
+        json={"author": "b", "body": "hi"},
+        headers={**_auth(client), **INGRESS_HEADERS},
+    )
+    assert r.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_admin_delete_post_and_comment(client, monkeypatch):
+    monkeypatch.setenv("SLOPCLANKER_ADMIN", "boss")
+    r = await client.post(
+        "/api/posts",
+        json={"title": "t", "body": "b", "author": "a"},
+        headers=_auth(client),
+    )
+    pid = r.json()["id"]
+    r = await client.post(
+        f"/api/posts/{pid}/comments",
+        json={"author": "a", "body": "c1"},
+        headers=_auth(client),
+    )
+    cid = r.json()["id"]
+    # non-admin -> 403
+    r = await client.request(
+        "DELETE", f"/api/posts/{pid}", json={"actor": "a"}, headers=_auth(client)
+    )
+    assert r.status_code == 403
+    # admin deletes comment, then post
+    r = await client.request(
+        "DELETE", f"/api/comments/{cid}", json={"actor": "boss"}, headers=_auth(client)
+    )
+    assert r.json()["ok"] is True
+    r = await client.request(
+        "DELETE", f"/api/posts/{pid}", json={"actor": "boss"}, headers=_auth(client)
+    )
+    assert r.json()["ok"] is True
+    r = await client.get(f"/api/posts/{pid}", headers=_auth(client))
+    assert r.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_admin_unarchive_todo(client, monkeypatch):
+    monkeypatch.setenv("SLOPCLANKER_ADMIN", "boss")
+    r = await client.post(
+        "/api/todos", json={"title": "x", "author": "a"}, headers=_auth(client)
+    )
+    tid = r.json()["id"]
+    await client.post(f"/api/todos/{tid}/archive", headers=_auth(client))
+    # non-admin -> 403
+    r = await client.post(
+        f"/api/todos/{tid}/unarchive", json={"actor": "a"}, headers=_auth(client)
+    )
+    assert r.status_code == 403
+    r = await client.post(
+        f"/api/todos/{tid}/unarchive", json={"actor": "boss"}, headers=_auth(client)
+    )
+    assert r.json()["ok"] is True
+    r = await client.get("/api/todos?status=archive", headers=_auth(client))
+    assert r.json() == []
+
+
+@pytest.mark.anyio
+async def test_overview_advertises_admin_name(client):
+    r = await client.get("/api/overview", headers=_auth(client))
+    assert r.json()["admin_name"] == "admin"
+
+
 @pytest.mark.anyio
 async def test_index_serves_ui(client):
     r = await client.get("/")

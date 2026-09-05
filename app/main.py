@@ -62,6 +62,19 @@ class RequestTooLarge(Exception):
     """Request body above the size cap."""
 
 
+class AdminRequired(Exception):
+    """Actor is not the configured admin."""
+
+
+def _admin_name() -> str:
+    return os.environ.get("SLOPCLANKER_ADMIN", "admin")
+
+
+def _require_admin(data: dict) -> None:
+    if str(data.get("actor", "")).strip() != _admin_name():
+        raise AdminRequired(f"admin ({_admin_name()}) only")
+
+
 MAX_BODY_BYTES = 1_000_000
 
 
@@ -74,6 +87,8 @@ def _api(handler: Callable[[Request], Awaitable[JSONResponse]]) -> Callable[...,
             return await handler(request)
         except RequestTooLarge as err:
             return JSONResponse({"error": str(err)}, status_code=413)
+        except AdminRequired as err:
+            return JSONResponse({"error": str(err)}, status_code=403)
         except (TypeError, ValueError) as err:
             return JSONResponse({"error": str(err)}, status_code=400)
 
@@ -162,11 +177,11 @@ async def api_overview(request: Request) -> JSONResponse:
     except ValueError:
         seen = 0.0
     with _db() as conn:
-        return JSONResponse(
-            store.overview(
-                conn, heartbeat_timeout=_heartbeat_timeout(), seen_since=seen
-            )
+        body = store.overview(
+            conn, heartbeat_timeout=_heartbeat_timeout(), seen_since=seen
         )
+    body["admin_name"] = _admin_name()
+    return JSONResponse(body)
 
 
 # --- projects --------------------------------------------------------------
@@ -267,6 +282,26 @@ async def api_close_post(request: Request) -> JSONResponse:
 # --- todos -----------------------------------------------------------------
 
 
+@mcp.custom_route("/api/posts/{post_id:int}", methods=["DELETE"])
+@_api
+async def api_delete_post(request: Request) -> JSONResponse:
+    data = await _json_body(request)
+    _require_admin(data)
+    with _db() as conn:
+        store.delete_post(conn, request.path_params["post_id"])
+    return JSONResponse({"ok": True})
+
+
+@mcp.custom_route("/api/comments/{comment_id:int}", methods=["DELETE"])
+@_api
+async def api_delete_comment(request: Request) -> JSONResponse:
+    data = await _json_body(request)
+    _require_admin(data)
+    with _db() as conn:
+        store.delete_comment(conn, request.path_params["comment_id"])
+    return JSONResponse({"ok": True})
+
+
 @mcp.custom_route("/api/todos", methods=["POST"])
 @_api
 async def api_add_todo(request: Request) -> JSONResponse:
@@ -345,6 +380,18 @@ async def api_reopen_todo(request: Request) -> JSONResponse:
 async def api_archive_todo(request: Request) -> JSONResponse:
     with _db() as conn:
         store.archive_todo(conn, request.path_params["todo_id"])
+    return JSONResponse({"ok": True})
+
+
+@mcp.custom_route("/api/todos/{todo_id:int}/unarchive", methods=["POST"])
+@_api
+async def api_unarchive_todo(request: Request) -> JSONResponse:
+    data = await _json_body(request)
+    _require_admin(data)
+    with _db() as conn:
+        store.unarchive_todo(
+            conn, request.path_params["todo_id"], data.get("actor", "")
+        )
     return JSONResponse({"ok": True})
 
 
@@ -612,6 +659,29 @@ async def api_check(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
+class IngressPath:
+    """Strip the Home Assistant ingress prefix so routes match.
+
+    HA ingress forwards ``/api/hassio_ingress/<token>/foo`` as-is and sets
+    ``X-Ingress-Path: /api/hassio_ingress/<token>``. Browsers keep the
+    prefixed URLs (the UI uses relative paths); we strip the prefix for
+    routing only.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:
+        if scope["type"] == "http":
+            headers = {k.lower(): v for k, v in scope.get("headers", [])}
+            prefix = headers.get(b"x-ingress-path", b"").decode("latin-1")
+            path = scope.get("path", "")
+            if prefix and path.startswith(prefix):
+                scope = dict(scope)
+                scope["path"] = path[len(prefix) :] or "/"
+        await self.app(scope, receive, send)
+
+
 class BearerAuth:
     """Pure ASGI middleware: bearer token on /api and /mcp; public paths skip.
 
@@ -641,7 +711,9 @@ from app.tools import register as _register_tools
 
 _register_tools(mcp)
 
-asgi_app = mcp.http_app(path="/mcp", middleware=[Middleware(BearerAuth)])
+asgi_app = mcp.http_app(
+    path="/mcp", middleware=[Middleware(IngressPath), Middleware(BearerAuth)]
+)
 
 
 def main() -> None:

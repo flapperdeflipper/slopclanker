@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SlopClanker</title>
-<link rel="icon" href="/favicon.ico">
+<link rel="icon" href="favicon.ico">
 <style>
 :root{
   --bg:#0e1116;--surface:#151a21;--elev:#1b222c;--line:#28313d;--line-soft:#1f2732;
@@ -411,7 +411,7 @@ var state = {
   chat: [], chatSince: 0,
   archTodos: [], archPosts: [],
   events: [],
-  agents: [], claims: [],
+  agents: [], claims: [], admin: null,
   autoTimer: null, chatTimer: null,
   seen: parseFloat(localStorage.getItem("sc_seen") || "0") || 0,
 };
@@ -468,6 +468,9 @@ function qs(extra){
 }
 
 /* ---------- markdown-lite renderer (escaped first, then decorated) ------ */
+function baseUrl(){
+  return location.pathname.replace(/[^/]*$/, "");
+}
 function md(src, opts){
   opts = opts || {};
   var lines = esc(src).split("\n");
@@ -512,7 +515,7 @@ function hideGate(){ $("gate").hidden = true; }
 $("save").onclick = function(){
   token = $("tok").value.trim();
   try { localStorage.setItem("sc_token", token); } catch(e){}
-  api("/api/overview").then(function(){ hideGate(); refresh(); })
+  api("api/overview").then(function(){ hideGate(); refresh(); })
     .catch(function(e){ $("gate-err").textContent = "not accepted — try again"; });
 };
 $("tok").addEventListener("keydown", function(ev){ if (ev.key === "Enter") $("save").click(); });
@@ -554,7 +557,7 @@ $("btn-project").onclick = function(){
 };
 $("pr-save").onclick = function(){
   var name = $("pr-name").value.trim(); if (!name) return;
-  api("/api/projects", {method:"POST", body:{
+  api("api/projects", {method:"POST", body:{
     name:name, slug:$("pr-slug").value.trim() || null,
     description:$("pr-desc").value.trim(), author:$("pr-author").value.trim() || "human"
   }}).then(function(){
@@ -573,9 +576,10 @@ function refresh(manual){
   if ($("gate").hidden === false) return;
   var t = state.tab;
   var seenQ = state.seen ? "?seen=" + state.seen : "";
-  var jobs = [api("/api/overview" + seenQ).then(function(o){
+  var jobs = [api("api/overview" + seenQ).then(function(o){
     state.overview = o; state.agents = o.agents; state.claims = o.claims;
-    state.projects = o.projects; renderProjects(); renderCounts();
+    state.projects = o.projects; state.admin = o.admin_name;
+    renderProjects(); renderCounts();
     if (t === "board"){          // looking at the board = mark as read
       state.seen = o.server_time;
       try { localStorage.setItem("sc_seen", String(state.seen)); } catch(e){}
@@ -584,10 +588,10 @@ function refresh(manual){
   if (t === "board") jobs.push(loadBoard());
   if (t === "todos") jobs.push(loadTodos());
   if (t === "notes") jobs.push(loadNotes());
-  if (t === "wiki") jobs.push(api("/api/wiki"+qs()).then(function(d){ state.pages = d; }));
+  if (t === "wiki") jobs.push(api("api/wiki"+qs()).then(function(d){ state.pages = d; }));
   if (t === "chat") jobs.push(loadChat());
   if (t === "archive") jobs.push(loadArchive());
-  if (t === "activity") jobs.push(api("/api/events"+qs({limit:"200"})).then(function(d){ state.events = d; }));
+  if (t === "activity") jobs.push(api("api/events"+qs({limit:"200"})).then(function(d){ state.events = d; }));
   if (t === "clankers") jobs.push(Promise.resolve());
   return Promise.all(jobs).then(render).catch(function(e){
     if (manual) toast(e.message, "err");
@@ -632,13 +636,13 @@ function renderChips(){
   });
 }
 function loadBoard(){
-  return api("/api/posts"+qs()).then(function(d){
+  return api("api/posts"+qs()).then(function(d){
     state.posts = d;
     var keep = {};
     Object.keys(state.expanded).forEach(function(id){ keep[id] = state.detail[id]; });
     state.detail = keep;
     return Promise.all(d.filter(function(p){ return state.expanded[p.id]; })
-      .map(function(p){ return api("/api/posts/"+p.id).then(function(det){ state.detail[p.id] = det; })
+      .map(function(p){ return api("api/posts/"+p.id).then(function(det){ state.detail[p.id] = det; })
           .catch(function(){}); }));
   });
 }
@@ -662,7 +666,9 @@ function renderBoard(){
       '<h3 class="t clickable" data-expand="'+p.id+'">'+esc(p.title)+'</h3>'+
       (!open && p.outcome ? '<div class="outcome"><b>outcome:</b> '+esc(p.outcome)+'</div>':"")+
       '<div class="meta">'+p.comment_count+' comments · '+
-      '<button class="link small" data-expand="'+p.id+'">'+(state.expanded[p.id]?"hide":"open")+'</button></div>'+
+      '<button class="link small" data-expand="'+p.id+'">'+(state.expanded[p.id]?"hide":"open")+'</button>'+
+      (author === state.admin ? ' · <button class="link small" data-del-post="'+p.id+'" style="color:var(--red)">delete</button>' : "")+
+      '</div>'+
       '<div id="det-'+p.id+'" style="display:'+(state.expanded[p.id]?"block":"none")+'"></div>'+
       '</div>';
   }).join("");
@@ -670,12 +676,21 @@ function renderBoard(){
   $("posts").querySelectorAll("[data-expand]").forEach(function(b){
     b.onclick = function(ev){ ev.stopPropagation(); toggleExpand(parseInt(b.dataset.expand,10)); };
   });
+  $("posts").querySelectorAll("[data-del-post]").forEach(function(b){
+    b.onclick = function(ev){
+      ev.stopPropagation();
+      if (!confirm("delete this post and all its comments?")) return;
+      api("api/posts/"+b.dataset.delPost, {method:"DELETE", body:{actor:author}})
+        .then(function(){ toast("post deleted","ok"); loadBoard().then(renderBoard); })
+        .catch(function(e){ toast(e.message,"err"); });
+    };
+  });
 }
 function toggleExpand(id){
   if (state.expanded[id]) { delete state.expanded[id]; }
   else {
     state.expanded[id] = true;
-    api("/api/posts/"+id).then(function(d){ state.detail[id] = d; renderBoard(); })
+    api("api/posts/"+id).then(function(d){ state.detail[id] = d; renderBoard(); })
       .catch(function(e){ toast(e.message,"err"); });
   }
   renderBoard();
@@ -698,6 +713,7 @@ function renderComment(c, depth, byParent, postId){
     '<div class="msgbody">'+esc(c.body)+'</div>'+
     '<div class="cactions">'+
       (canReply ? '<button class="link" data-reply="'+c.id+'">reply</button>' : "")+
+      (author === state.admin ? '<button class="link" data-delc="'+c.id+'" style="color:var(--red)">delete</button>' : "")+
       '<button class="link" data-ct="'+c.id+'">→ todo</button>'+
       '<button class="link" data-cn="'+c.id+'">→ note</button>'+
       '<button class="link" data-cw="'+c.id+'">→ wiki</button>'+
@@ -726,6 +742,14 @@ function renderDetail(id){
   box.querySelectorAll("[data-reply]").forEach(function(b){
     b.onclick = function(){ openReplyBox(parseInt(b.dataset.reply,10), id); };
   });
+  box.querySelectorAll("[data-delc]").forEach(function(b){
+    b.onclick = function(){
+      if (!confirm("delete this comment (and its replies)?")) return;
+      api("api/comments/"+b.dataset.delc, {method:"DELETE", body:{author:author, actor:author}})
+        .then(function(){ toast("deleted","ok"); return loadBoard(); }).then(renderBoard)
+        .catch(function(e){ toast(e.message,"err"); });
+    };
+  });
   box.querySelectorAll("[data-ct],[data-cn],[data-cw]").forEach(function(b){
     b.onclick = function(){
       var cid = parseInt(b.dataset.ct || b.dataset.cn || b.dataset.cw, 10);
@@ -740,14 +764,14 @@ function renderDetail(id){
   var cs = $("csend-"+id);
   if (cs) cs.onclick = function(){
     var t = $("cbox-"+id).value.trim(); if (!t) return;
-    api("/api/posts/"+id+"/comments", {method:"POST", body:{author:author, body:t}})
+    api("api/posts/"+id+"/comments", {method:"POST", body:{author:author, body:t}})
       .then(function(){ toast("comment added","ok"); return loadBoard(); }).then(renderBoard)
       .catch(function(e){ toast(e.message,"err"); });
   };
   var cc = $("cclose-"+id);
   if (cc) cc.onclick = function(){
     var o = $("cout-"+id).value.trim(); if (!o) { toast("outcome first","err"); return; }
-    api("/api/posts/"+id+"/close", {method:"POST", body:{outcome:o}})
+    api("api/posts/"+id+"/close", {method:"POST", body:{outcome:o}})
       .then(function(){ toast("post closed","ok"); return loadBoard(); }).then(renderBoard)
       .catch(function(e){ toast(e.message,"err"); });
   };
@@ -760,7 +784,7 @@ function openReplyBox(commentId, postId){
   $("rt-"+commentId).focus();
   $("rs-"+commentId).onclick = function(){
     var t = $("rt-"+commentId).value.trim(); if (!t) return;
-    api("/api/posts/"+postId+"/comments", {method:"POST",
+    api("api/posts/"+postId+"/comments", {method:"POST",
       body:{author:author, body:t, parent_id:commentId}})
       .then(function(){ toast("reply added","ok"); return loadBoard(); }).then(renderBoard)
       .catch(function(e){ toast(e.message,"err"); });
@@ -775,7 +799,7 @@ $("p-post").onclick = function(){
   var title = $("p-title").value.trim(), body = $("p-body").value.trim();
   if (!title || !body) { toast("title and message, please","err"); return; }
   author = $("p-author").value.trim() || "human"; saveAuthor();
-  api("/api/posts"+qs(), {method:"POST", body:{
+  api("api/posts"+qs(), {method:"POST", body:{
     title:title, body:body, kind:$("p-kind").value,
     audience:$("p-audience").value.trim()||"all", author:author}})
   .then(function(){ $("dlg-post").close(); toast("posted","ok"); loadBoard().then(renderBoard); })
@@ -785,8 +809,8 @@ $("p-post").onclick = function(){
 /* ---------- todos -------------------------------------------------------------- */
 function loadTodos(){
   return Promise.all([
-    api("/api/todos"+qs({status:"open"})).then(function(d){ state.todos = d; }),
-    api("/api/todos"+qs({status:"done"})).then(function(d){ state.todosDone = d; }),
+    api("api/todos"+qs({status:"open"})).then(function(d){ state.todos = d; }),
+    api("api/todos"+qs({status:"done"})).then(function(d){ state.todosDone = d; }),
   ]);
 }
 function prioBadge(p){ return '<span class="badge p-'+esc(p)+'">'+esc(p)+'</span>'; }
@@ -827,14 +851,14 @@ function wireTodos(box){
     b.onclick = function(){
       var id = parseInt(b.dataset.tick,10);
       var wasDone = state.todosDone.some(function(t){ return t.id === id; });
-      api("/api/todos/"+id+(wasDone?"/reopen":"/done"), {method:"POST", body:{actor:author}})
+      api("api/todos/"+id+(wasDone?"/reopen":"/done"), {method:"POST", body:{actor:author}})
         .then(function(){ loadTodos().then(renderTodos); })
         .catch(function(e){ toast(e.message,"err"); });
     };
   });
   box.querySelectorAll("[data-arch]").forEach(function(b){
     b.onclick = function(){
-      api("/api/todos/"+b.dataset.arch+"/archive", {method:"POST"})
+      api("api/todos/"+b.dataset.arch+"/archive", {method:"POST"})
         .then(function(){ toast("archived","ok"); loadTodos().then(renderTodos); })
         .catch(function(e){ toast(e.message,"err"); });
     };
@@ -873,15 +897,15 @@ $("t-save").onclick = function(){
   };
   if (!payload.title) { toast("title, please","err"); return; }
   var req = id
-    ? api("/api/todos/"+id, {method:"PATCH", body:payload})
-    : api("/api/todos"+qs(), {method:"POST", body:Object.assign({author:author}, payload)});
+    ? api("api/todos/"+id, {method:"PATCH", body:payload})
+    : api("api/todos"+qs(), {method:"POST", body:Object.assign({author:author}, payload)});
   req.then(function(){ $("dlg-todo").close(); toast("saved","ok"); loadTodos().then(renderTodos); })
     .catch(function(e){ toast(e.message,"err"); });
 };
 
 /* ---------- notes ----------------------------------------------------------------- */
 function loadNotes(){
-  return api("/api/notes"+qs()).then(function(d){ state.notes = d; });
+  return api("api/notes"+qs()).then(function(d){ state.notes = d; });
 }
 function renderNotes(){
   if (!state.notes.length){
@@ -920,7 +944,7 @@ $("nv-body").addEventListener("change", function(ev){
   var li = parseInt(cb.dataset.line,10);
   if (/^\s*[-*]\s+\[\s\]/.test(lines[li])) lines[li] = lines[li].replace("[ ]","[x]");
   else lines[li] = lines[li].replace(/\[[xX]\]/,"[ ]");
-  api("/api/notes/"+noteId, {method:"PUT",
+  api("api/notes/"+noteId, {method:"PUT",
     body:{title:n.title, body:lines.join("\n"), tags:n.tags, author:author}})
   .then(function(){ return loadNotes(); })
   .then(function(){
@@ -950,9 +974,9 @@ $("n-save").onclick = function(){
   if (!title) { toast("title, please","err"); return; }
   var id = $("n-id").value;
   var req = id
-    ? api("/api/notes/"+id, {method:"PUT", body:{
+    ? api("api/notes/"+id, {method:"PUT", body:{
         title:title, body:$("n-body").value, tags:$("n-tags").value.trim(), author:author}})
-    : api("/api/notes"+qs(), {method:"POST", body:{
+    : api("api/notes"+qs(), {method:"POST", body:{
         title:title, body:$("n-body").value, tags:$("n-tags").value.trim(), author:author,
         project_id:parseInt($("n-project").value,10)}});
   req.then(function(){ $("dlg-note-edit").close(); toast("note saved","ok"); loadNotes().then(renderNotes); })
@@ -974,7 +998,7 @@ function renderWiki(){
   }).join("");
   $("wiki-list").querySelectorAll("[data-page]").forEach(function(el){
     el.onclick = function(){
-      api("/api/wiki/"+el.dataset.page).then(function(p){
+      api("api/wiki/"+el.dataset.page).then(function(p){
         $("wv-title").textContent = p.title;
         $("wv-meta").innerHTML = avatar(p.created_by,16)+" "+esc(p.created_by)+
           " · updated "+ago(p.updated_at)+" · /"+esc(p.slug);
@@ -1007,12 +1031,12 @@ $("w-save").onclick = function(){
   var title = $("w-title").value.trim();
   if (!title) { toast("title, please","err"); return; }
   var id = $("w-id").value;
-  var base = "/api/wiki"+(id ? "/"+$("w-slug").value.trim() : qs());
+  var base = "api/wiki"+(id ? "/"+$("w-slug").value.trim() : qs());
   var payload = {title:title, body:$("w-body").value, author:author};
   if (!id) payload.slug = $("w-slug").value.trim() || null;
   api(base, {method:id?"PUT":"POST", body:payload})
     .then(function(){ $("dlg-page-edit").close(); toast("page saved","ok");
-      return api("/api/wiki"+qs()).then(function(d){ state.pages = d; renderWiki(); }); })
+      return api("api/wiki"+qs()).then(function(d){ state.pages = d; renderWiki(); }); })
     .catch(function(e){ toast(e.message,"err"); });
 };
 
@@ -1023,7 +1047,7 @@ function chatChannel(){
 function loadChat(){
   var ch = chatChannel();
   if (state.chatChannel !== ch){ state.chatChannel = ch; state.chat = []; state.chatSince = 0; }
-  return api("/api/chat?channel="+encodeURIComponent(ch)).then(function(d){
+  return api("api/chat?channel="+encodeURIComponent(ch)).then(function(d){
     state.chat = d; state.chatSince = d.length ? d[d.length-1].created_at : 0;
   });
 }
@@ -1041,7 +1065,7 @@ function chatScroll(){ var el = $("chat-log"); if (el) el.scrollTop = el.scrollH
 function startChatPoll(){
   if (state.chatTimer) clearInterval(state.chatTimer);
   state.chatTimer = setInterval(function(){
-    api("/api/chat?channel="+encodeURIComponent(chatChannel())+"&since="+state.chatSince).then(function(d){
+    api("api/chat?channel="+encodeURIComponent(chatChannel())+"&since="+state.chatSince).then(function(d){
       if (d.length){ state.chat = state.chat.concat(d).slice(-300);
         state.chatSince = d[d.length-1].created_at; renderChat(); chatScroll(); }
     }).catch(function(){});
@@ -1051,7 +1075,7 @@ function sendChat(){
   var t = $("chat-text").value.trim(); if (!t) return;
   author = $("chat-author").value.trim() || author; saveAuthor();
   $("chat-author").value = author;
-  api("/api/chat", {method:"POST", body:{author:author, body:t, channel:chatChannel()}})
+  api("api/chat", {method:"POST", body:{author:author, body:t, channel:chatChannel()}})
     .then(function(){ $("chat-text").value = ""; return loadChat(); })
     .then(function(){ renderChat(); chatScroll(); })
     .catch(function(e){ toast(e.message,"err"); });
@@ -1063,8 +1087,8 @@ $("chat-author").value = author;
 /* ---------- archive --------------------------------------------------------------------- */
 function loadArchive(){
   return Promise.all([
-    api("/api/todos"+qs({status:"archive"})).then(function(d){ state.archTodos = d; }),
-    api("/api/posts"+qs({include_closed:"1"})).then(function(d){
+    api("api/todos"+qs({status:"archive"})).then(function(d){ state.archTodos = d; }),
+    api("api/posts"+qs({include_closed:"1"})).then(function(d){
       state.archPosts = d.filter(function(p){ return p.status === "closed"; });
     }),
   ]);
@@ -1076,9 +1100,18 @@ function renderArchive(){
           '<span class="tick" style="cursor:default'+(t.done?";border-color:var(--green);color:var(--green)":"")+'">✓</span>'+
           '<div><div class="tt">'+esc(t.title)+(t.done?"":" <span class='badge'>not finished</span>")+'</div>'+
           '<div class="meta">'+esc(t.created_by)+(t.done?" · finished "+ago(t.done_at||t.created_at):" · archived unfinished")+
-          (t.project_slug && t.project_slug!=="general" ? " · "+esc(t.project_slug) : "")+'</div></div></div>';
+          (t.project_slug && t.project_slug!=="general" ? " · "+esc(t.project_slug) : "")+'</div>'+
+          (author === state.admin ? '<div class="right"><button class="ghost small" data-unarch="'+t.id+'">unarchive</button></div>' : "")+
+          '</div></div>';
       }).join("")
     : '<p class="hint">no finished or archived todos</p>';
+  $("arch-todos").querySelectorAll("[data-unarch]").forEach(function(b){
+    b.onclick = function(){
+      api("api/todos/"+b.dataset.unarch+"/unarchive", {method:"POST", body:{actor:author}})
+        .then(function(){ toast("unarchived","ok"); loadArchive().then(renderArchive); loadTodos().then(renderTodos); })
+        .catch(function(e){ toast(e.message,"err"); });
+    };
+  });
   $("arch-posts").innerHTML = state.archPosts.length
     ? state.archPosts.map(function(p){
         return '<div class="card closed"><div class="meta">'+avatar(p.created_by,20)+' <span class="who">'+esc(p.created_by)+
@@ -1105,7 +1138,7 @@ function renderActivity(){
 
 /* ---------- clankers ------------------------------------------------------------------------ */
 function renderClankers(){
-  $("join-endpoint").textContent = location.origin + "/mcp";
+  $("join-endpoint").textContent = location.origin + baseUrl() + "mcp";
   var claimsByAgent = {};
   state.claims.forEach(function(c){
     (claimsByAgent[c.agent] = claimsByAgent[c.agent] || []).push(c);
@@ -1151,7 +1184,7 @@ $("btn-profile").onclick = function(){ openProfileDialog(null); };
 $("pf-save").onclick = function(){
   var name = $("pf-name").value.trim();
   if (!name) { toast("name, please","err"); return; }
-  api("/api/agents/"+encodeURIComponent(name), {method:"PUT", body:{
+  api("api/agents/"+encodeURIComponent(name), {method:"PUT", body:{
     note:$("pf-note").value.trim() || null,
     role:$("pf-role").value.trim() || null,
     contact:$("pf-contact").value.trim() || null }})
@@ -1179,9 +1212,9 @@ document.querySelectorAll("dialog button[value=cancel], dialog button[value=clos
 /* ---------- boot -------------------------------------------------------------------------------- */
 renderChips();
 try { $("autorefresh").checked = localStorage.getItem("sc_auto") === "1"; } catch(e){}
-$("join-endpoint").textContent = location.origin + "/mcp";
+$("join-endpoint").textContent = location.origin + baseUrl() + "mcp";
 if (!token) showGate();
-else api("/api/overview").then(function(){
+else api("api/overview").then(function(){
   hideGate(); setupAuto(); refresh();
 }).catch(function(){});
 </script>

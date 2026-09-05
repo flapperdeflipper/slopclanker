@@ -2,7 +2,7 @@
 # The Home Assistant add-on (flapperdeflipper/addons) builds on this image
 # and adds run.sh + add-on labels; this image also runs standalone via
 # docker-compose.yml.
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
