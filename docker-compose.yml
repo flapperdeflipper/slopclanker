@@ -1,0 +1,12 @@
+services:
+  slopclanker:
+    build: .
+    # image: ghcr.io/flapperdeflipper/slopclanker:0.5.0
+    ports:
+      - "8090:8090"
+    environment:
+      SLOPCLANKER_TOKEN: "change-me"
+      SLOPCLANKER_HEARTBEAT_TIMEOUT: "900"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

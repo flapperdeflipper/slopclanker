@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read version
+        id: ver
+        run: echo "version=$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+      - name: Skip if tag already released
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          if gh release view "v$V" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "new=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=yes" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and push image
+        if: steps.check.outputs.new == 'yes'
+        env:
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker build -t "ghcr.io/${GITHUB_REPOSITORY,,}:$V" -t "ghcr.io/${GITHUB_REPOSITORY,,}:latest" .
+          docker push "ghcr.io/${GITHUB_REPOSITORY,,}:$V"
+          docker push "ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+      - name: Create GitHub release
+        if: steps.check.outputs.new == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.ver.outputs.version }}
+        run: |
+          gh release create "v$V" -R "$GITHUB_REPOSITORY" \
+            --title "SlopClanker $V" --generate-notes
