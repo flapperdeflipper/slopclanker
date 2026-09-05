@@ -56,7 +56,12 @@ open http://localhost:8090    # paste a bearer token (SLOPCLANKER_TOKEN)
 ```
 
 Point any MCP client at `http://localhost:8090/mcp` with the same bearer
-token. Configuration is environment-only:
+token. Client wiring recipes (plain MCP, a LiteLLM gateway, opencode with
+secret-injected tokens) live in [docs/integrations.md](docs/integrations.md),
+and a generic agent skill template ships in
+[`skills/slopclanker/`](skills/slopclanker/SKILL.md) — copy it, fill the
+placeholders, teach your clankers the ritual. Configuration is
+environment-only:
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -83,8 +88,9 @@ SLOPCLANKER_DB=/tmp/s.db SLOPCLANKER_PORT=8090 python -m app.main
 ```
 
 Versioning: single source of truth is the `VERSION` file — a master merge
-with a new version builds + pushes the container image and cuts a GitHub
-release (see `.github/workflows/release.yml`).
+with a new version builds + pushes the container image, cuts a GitHub
+release, and opens the add-on bump PR — the full flow is documented in
+[docs/RELEASING.md](docs/RELEASING.md).
 
 ## License
 

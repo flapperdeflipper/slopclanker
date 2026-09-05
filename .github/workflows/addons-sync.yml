@@ -1,0 +1,78 @@
+name: Addon sync
+
+# When a release is published here, open a version-bump PR against the
+# Home Assistant add-on repo (flapperdeflipper/addons) so the add-on
+# tracks the new image. Requires a PAT with repo scope stored as
+# SLOPCLANKER_SYNC_TOKEN (the workflow's own GITHUB_TOKEN cannot open
+# cross-repo PRs). Without the token the run succeeds with instructions
+# for the manual procedure in docs/RELEASING.md.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bump-addon:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check sync token
+        id: tok
+        env:
+          SYNC_TOKEN: ${{ secrets.SLOPCLANKER_SYNC_TOKEN }}
+        run: |
+          if [ -n "$SYNC_TOKEN" ]; then
+            echo "available=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=no" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Open version-bump PR in flapperdeflipper/addons
+        if: steps.tok.outputs.available == 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.SLOPCLANKER_SYNC_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+        run: |
+          V="${TAG#v}"
+          BRANCH="slopclanker/bump-${TAG}"
+          git config --global user.name "slopclanker-sync"
+          git config --global user.email "noreply@users.noreply.github.com"
+          git clone --depth 1 https://x-access-token:${GH_TOKEN}@github.com/flapperdeflipper/addons.git addons
+          cd addons
+          if git ls-remote --heads origin "$BRANCH" | grep -q "$BRANCH"; then
+            echo "Branch $BRANCH already exists — nothing to do."
+            exit 0
+          fi
+          git checkout -b "$BRANCH"
+          # Pin the add-on to the released image
+          sed -i "s|^FROM ghcr.io/flapperdeflipper/slopclanker:.*|FROM ghcr.io/flapperdeflipper/slopclanker:${V}|" slopclanker/Dockerfile
+          # Bump the add-on version to match
+          sed -i "s|^version: .*|version: \"${V}\"|" slopclanker/config.yaml
+          # Record it in the add-on changelog
+          if [ -f slopclanker/CHANGELOG.md ]; then
+            printf '## %s\n\n- Track upstream SlopClanker %s ([release notes](%s))\n\n' \
+              "$V" "$V" "$RELEASE_URL" | cat - slopclanker/CHANGELOG.md > /tmp/cl && mv /tmp/cl slopclanker/CHANGELOG.md
+          else
+            printf '# Changelog\n\n## %s\n\n- Track upstream SlopClanker %s ([release notes](%s))\n' \
+              "$V" "$V" "$RELEASE_URL" > slopclanker/CHANGELOG.md
+          fi
+          if git diff --quiet; then
+            echo "Nothing changed — add-on already at ${V}."
+            exit 0
+          fi
+          git add slopclanker
+          git commit -m "slopclanker: track upstream ${TAG} (${V})"
+          git push origin "$BRANCH"
+          gh pr create \
+            --repo flapperdeflipper/addons \
+            --base master --head "$BRANCH" \
+            --title "slopclanker: track upstream ${TAG}" \
+            --body "Automated bump: pin the add-on image to \`ghcr.io/flapperdeflipper/slopclanker:${V}\` and align \`config.yaml\`. Upstream release: ${RELEASE_URL}"
+      - name: Manual fallback instructions
+        if: steps.tok.outputs.available == 'no'
+        run: |
+          echo "::notice::SLOPCLANKER_SYNC_TOKEN is not configured — the add-on bump PR was NOT opened."
+          echo "::notice::Open it manually following docs/RELEASING.md (pin FROM tag, bump config.yaml version, CHANGELOG entry)."
