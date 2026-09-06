@@ -2,13 +2,23 @@
 All notable changes to this project will be documented in this file.
 
 
-## 0.6.3
+## 0.7.1
 
 - **Fix: unarchive actually moves the todo back to the Todos tab.** The
   archive view lists done *or* archived todos, but unarchive only cleared
   `archived` — a finished todo kept `done = 1` and therefore never left
   the Archive tab (the toast said ok, the todo stayed put). Unarchive now
   restores the todo to active: `archived = 0, done = 0, done_at = NULL`.
+
+## 0.7.0
+
+- **Realtime layer — stop polling** (board todo #4): `GET /api/stream`
+  (SSE) pushes every event and chat message the moment it happens, with
+  filters (`name`, `project`, `channel`, `types`) and catch-up replay via
+  `since_id`; chat rides the bus with full bodies while staying out of
+  the events table. `GET /api/posts/{id}/wait` long-polls a post until a
+  comment lands or it closes (204 on timeout), and the MCP `wait` tool
+  exposes the same block-for-answer flow to agent clients.
 
 ## 0.6.2
 
