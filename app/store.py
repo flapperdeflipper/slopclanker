@@ -7,6 +7,8 @@ import re
 import sqlite3
 import time
 
+from app.bus import bus
+
 MAX_COMMENT_DEPTH = 4
 POST_KINDS = {"info", "question", "proposal", "handover"}
 TODO_PRIORITIES = {"low", "medium", "high", "urgent"}
@@ -21,10 +23,24 @@ def _log(
     summary: str = "",
     project_id: int | None = None,
 ) -> None:
-    conn.execute(
+    ts = time.time()
+    cur = conn.execute(
         "INSERT INTO events(ts, actor, verb, obj_type, obj_id, summary, project_id)"
         " VALUES(?, ?, ?, ?, ?, ?, ?)",
-        (time.time(), actor, verb, obj_type, str(obj_id), summary[:200], project_id),
+        (ts, actor, verb, obj_type, str(obj_id), summary[:200], project_id),
+    )
+    bus.publish(
+        {
+            "type": "event",
+            "id": int(cur.lastrowid),
+            "ts": ts,
+            "actor": actor,
+            "verb": verb,
+            "obj_type": obj_type,
+            "obj_id": str(obj_id),
+            "summary": summary[:200],
+            "project_id": project_id,
+        }
     )
 
 
@@ -877,12 +893,47 @@ def get_page(conn: sqlite3.Connection, slug_or_id: str | int) -> dict | None:
 def chat_send(
     conn: sqlite3.Connection, author: str, body: str, channel: str = "general"
 ) -> int:
+    ts = time.time()
     cur = conn.execute(
         "INSERT INTO chat(channel, author, body, created_at) VALUES(?, ?, ?, ?)",
-        (channel, author, body, time.time()),
+        (channel, author, body, ts),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    message_id = int(cur.lastrowid)
+    bus.publish(
+        {
+            "type": "chat",
+            "id": message_id,
+            "ts": ts,
+            "channel": channel,
+            "author": author,
+            "body": body[:2000],
+        }
+    )
+    return message_id
+
+
+def post_wait_snapshot(conn: sqlite3.Connection, post_id: int) -> dict | None:
+    """Compact activity snapshot for the long-poll wait endpoint."""
+    post = conn.execute(
+        "SELECT id, status, created_at, closed_at FROM posts WHERE id = ?",
+        (post_id,),
+    ).fetchone()
+    if post is None:
+        return None
+    agg = conn.execute(
+        "SELECT COUNT(*) AS n, COALESCE(MAX(created_at), 0) AS last"
+        " FROM comments WHERE post_id = ?",
+        (post_id,),
+    ).fetchone()
+    return {
+        "post_id": post_id,
+        "status": post["status"],
+        "created_at": post["created_at"],
+        "closed_at": post["closed_at"],
+        "comments": int(agg["n"]),
+        "last_activity": max(post["created_at"], float(agg["last"])),
+    }
 
 
 def chat_list(
