@@ -387,7 +387,6 @@ async def api_archive_todo(request: Request) -> JSONResponse:
 @_api
 async def api_unarchive_todo(request: Request) -> JSONResponse:
     data = await _json_body(request)
-    _require_admin(data)
     with _db() as conn:
         store.unarchive_todo(
             conn, request.path_params["todo_id"], data.get("actor", "")
