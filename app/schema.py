@@ -6,7 +6,9 @@ live only in credentials. Append-only logs (transitions, events) carry
 hash-chain columns filled by the services that write them.
 """
 
-SCHEMA_VERSION = 2
+# 3, not 2: the legacy 0.x line already stamped meta.schema_version='2'
+# in its (incompatible) schema. A fresh v1 database is '3'.
+SCHEMA_VERSION = 3
 
 SCHEMA_V2 = """
 PRAGMA journal_mode=WAL;

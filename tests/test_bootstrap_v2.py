@@ -82,3 +82,34 @@ def test_v2_db_left_alone(tmp_path):
     assert conn.execute("SELECT value FROM meta WHERE key='keep'").fetchone()
     conn.close()
     assert not list(tmp_path.glob("slopclanker-legacy*"))
+
+
+def test_legacy_claiming_two_renamed_aside(tmp_path):
+    """Regression: legacy 0.x stamped meta.schema_version='2' in an
+    incompatible schema — the marker alone must never pass is_v2."""
+    target = tmp_path / "slopclanker.db"
+    conn = sqlite3.connect(str(target))
+    conn.executescript(
+        "CREATE TABLE agents(name TEXT PRIMARY KEY, last_seen REAL NOT NULL);"
+        "INSERT INTO agents VALUES('primus', 1.0);"
+        "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);"
+        "INSERT INTO meta VALUES('schema_version', '2');"
+    )
+    conn.commit()
+    conn.close()
+    assert not db.is_v2(target)
+    bootstrap.ensure(target)
+    legacy = tmp_path / "slopclanker-legacy.db"
+    assert legacy.exists()
+    old = sqlite3.connect(str(legacy))
+    assert old.execute("SELECT COUNT(*) FROM agents").fetchone()[0] == 1
+    old.close()
+    assert db.is_v2(target)
+    fresh = sqlite3.connect(str(target))
+    assert (
+        fresh.execute(
+            "SELECT name FROM sqlite_master WHERE name='credentials'"
+        ).fetchone()
+        is not None
+    )
+    fresh.close()
