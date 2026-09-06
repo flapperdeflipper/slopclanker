@@ -1,344 +1,627 @@
-"""MCP tool surface: thin wrappers over the store.
+"""MCP tools — thin transports over the service layer.
 
-Registered onto the shared FastMCP instance via ``register(mcp)`` from
-app.main. Through the LiteLLM gateway tools appear prefixed with the server
-alias (slopclanker_hello, ...).
+The actor ALWAYS comes from the bearer token (get_http_request ->
+request.state.identity); no tool accepts an author/agent argument.
+The single can() gate stays in the services.
 """
 
-import os
-import time
-from collections.abc import Iterator
-from contextlib import contextmanager
+import json
 
 from fastmcp import FastMCP
-
-from app import store
-from app.db import connect
+from fastmcp.server.dependencies import get_http_request
 
 
-@contextmanager
-def _db() -> Iterator:
-    conn = connect(os.environ.get("SLOPCLANKER_DB", "/data/slopclanker.db"))
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-
-def _heartbeat_timeout() -> int:
-    return int(os.environ.get("SLOPCLANKER_HEARTBEAT_TIMEOUT", "900"))
+def _actor() -> dict:
+    request = get_http_request()
+    if request is None:
+        raise RuntimeError("MCP tools require the HTTP transport")
+    return request.state.identity
 
 
 def register(mcp: FastMCP) -> None:
+    from app import (
+        claims,
+        comms,
+        db,
+        decisions,
+        events,
+        knowledge,
+        links,
+        objects,
+        realtime,
+        statemachine,
+    )
+    from app import (
+        proofs as proofs_mod,
+    )
+    from app import (
+        questions as questions_mod,
+    )
+    from app import (
+        search as search_mod,
+    )
 
-    def _resolve_project(project: str | int | None) -> int:
-        if project is None or project == "":
-            return 1
-        with _db() as conn:
-            found = store.get_project(conn, project)
-        if found is None:
-            raise ValueError(f"project '{project}' does not exist")
-        return int(found["id"])
+    def _conn():
+        return db.connect(db.db_path())
 
-    @mcp.tool
-    def hello(
-        name: str,
-        session_id: str | None = None,
-        note: str | None = None,
-        role: str | None = None,
-        contact: str | None = None,
-    ) -> dict:
-        """Announce yourself and refresh your heartbeat. Call at session start
-        and again whenever you want the full awareness snapshot: active
-        clankers, their file claims, posts awaiting your input, and your
-        todos. ``session_id`` should be your opencode session id so others can
-        read your conversation via OpenChamber. ``role`` (one-liner), ``note``
-        (bio/charter) and ``contact`` build your identity card and persist."""
-        with _db() as conn:
-            return store.hello(
-                conn,
-                name,
-                session_id=session_id,
-                note=note,
-                role=role,
-                contact=contact,
-                heartbeat_timeout=_heartbeat_timeout(),
-            )
+    def _payload(ev):
+        if isinstance(ev.get("payload"), str):
+            try:
+                ev["payload"] = json.loads(ev["payload"])
+            except ValueError:
+                pass
+        return ev
 
     @mcp.tool
-    def profile_set(
-        name: str,
-        note: str | None = None,
-        role: str | None = None,
-        contact: str | None = None,
-    ) -> dict:
-        """Create or update your identity card: ``role`` (one-liner), ``note``
-        (bio/charter - what you work on, quirks, warnings for others),
-        ``contact`` (how to reach you, e.g. your OpenChamber session URL).
-        Only passed fields change; returns the full card."""
-        with _db() as conn:
-            return store.profile_set(conn, name, note=note, role=role, contact=contact)
+    def hello(note: str = "") -> dict:
+        """Check in: who you are, unread inbox, open questions for you."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            unread = events.unread_for(conn, actor["id"])
+            mine = questions_mod.list_questions(conn, open_only=True, to_actor=actor)
+            return {
+                "identity": {
+                    k: actor[k] for k in ("id", "name", "kind", "role", "status")
+                },
+                "note": note[:500],
+                "unread": [_payload(dict(r)) for r in unread],
+                "open_questions": [dict(r) for r in mine],
+            }
+        finally:
+            conn.close()
 
     @mcp.tool
-    def profile_get(name: str) -> dict:
-        """Read a clanker's identity card: role, bio, contact, session, last
-        seen, active flag and current file claims. agent is null if unknown."""
-        with _db() as conn:
-            agent = store.get_agent(conn, name)
-            if agent is None:
-                return {"agent": None}
-            agent["claims"] = store.agent_claims(conn, name)
-            return {"agent": agent}
+    def projects(stack: int | None = None) -> dict:
+        """List projects (optionally by stack)."""
+        _actor()
+        conn = _conn()
+        try:
+            rows = objects.list_projects(conn, stack_id=stack, include_archived=False)
+            return {"projects": [dict(r) for r in rows]}
+        finally:
+            conn.close()
 
     @mcp.tool
-    def post(
-        author: str,
-        body: str,
-        title: str | None = None,
-        kind: str = "info",
-        audience: str = "all",
-        post_id: int | None = None,
-        parent_id: int | None = None,
-        project: str | int | None = None,
-    ) -> dict:
-        """Post to the townhall. Without ``post_id`` this starts a new post
-        (``title`` required; kind one of info|question|proposal|handover).
-        With ``post_id`` it comments on that post - pass ``parent_id`` of
-        another comment to nest (max depth 4). ``audience`` is 'all' or a
-        comma-separated list of clanker names. ``project`` is a slug or id."""
-        with _db() as conn:
-            if post_id is not None:
-                cid = store.add_comment(
-                    conn, post_id, author, body, parent_id=parent_id
-                )
-                return {"id": cid, "post_id": post_id, "parent_id": parent_id}
-            if not title:
-                raise ValueError("title is required when starting a new post")
-            pid = store.create_post(
-                conn,
-                title,
-                body,
-                created_by=author,
-                kind=kind,
-                audience=audience,
-                project_id=_resolve_project(project),
-            )
-            return {"id": pid, "post_id": pid}
+    def project_get(project_id: int) -> dict:
+        """Project detail with its tasks."""
+        _actor()
+        conn = _conn()
+        try:
+            proj = dict(objects.get_project(conn, project_id))
+            tasks = [dict(t) for t in objects.list_tasks(conn, project_id=project_id)]
+            return {"project": proj, "tasks": tasks}
+        finally:
+            conn.close()
 
     @mcp.tool
-    def check(name: str, since: float = 0.0) -> dict:
-        """Poll what's new for you since epoch ``since`` (use server_time from
-        your last hello/check as the next ``since``): new posts visible to you,
-        new comments, and new todos for you."""
-        with _db() as conn:
-            return store.check(conn, name, since=since)
-
-    @mcp.tool
-    def close(post_id: int, outcome: str) -> dict:
-        """Close a post, recording the decision (e.g. 'clanker-b merges').
-        The outcome is the record other clankers will read - state it clearly."""
-        with _db() as conn:
-            store.close_post(conn, post_id, outcome)
-            return {"ok": True}
-
-    @mcp.tool
-    def todos_add(
-        author: str,
+    def task_create(
+        project_id: int,
         title: str,
         body: str = "",
         priority: str = "medium",
-        tags: list[str] | None = None,
-        assignee: str | None = None,
-        project: str | int | None = None,
+        tags: str = "",
+        assignee_id: int | None = None,
     ) -> dict:
-        """Add a todo: ``title`` plus optional long ``description`` body,
-        ``priority`` (low|medium|high|urgent), ``tags``, ``assignee`` (a
-        clanker name) and ``project`` (slug or id)."""
-        with _db() as conn:
+        """Create a task (starts in idea)."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            tid = objects.create_task(
+                conn,
+                actor,
+                project_id,
+                title,
+                body=body,
+                priority=priority,
+                tags=tags,
+                assignee_id=assignee_id,
+            )
+            return {"id": tid}
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def task_get(task_id: int) -> dict:
+        """Task detail: todos, transition history, proofs, questions."""
+        _actor()
+        conn = _conn()
+        try:
+            task = dict(objects.get_task(conn, task_id))
+            todos = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT * FROM todos WHERE task_id = ? AND trashed_at IS NULL"
+                    " ORDER BY sort, id",
+                    (task_id,),
+                )
+            ]
+            trans = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT * FROM transitions WHERE task_id = ? ORDER BY id",
+                    (task_id,),
+                )
+            ]
+            proofs = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT * FROM proofs WHERE task_id = ? AND trashed_at IS NULL",
+                    (task_id,),
+                )
+            ]
+            qs = questions_mod.list_questions(
+                conn, attach_type="task", attach_id=task_id
+            )
             return {
-                "id": store.add_todo(
-                    conn,
-                    created_by=author,
-                    title=title,
-                    body=body,
-                    priority=priority,
-                    tags=tags or "",
-                    assignee=assignee,
-                    project_id=_resolve_project(project),
+                "task": task,
+                "todos": todos,
+                "transitions": trans,
+                "proofs": proofs,
+                "questions": [dict(q) for q in qs],
+            }
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def tasks(
+        project_id: int | None = None,
+        state: str | None = None,
+        assignee_id: int | None = None,
+    ) -> dict:
+        """List tasks, filterable by project/state/assignee."""
+        _actor()
+        conn = _conn()
+        try:
+            rows = objects.list_tasks(
+                conn, project_id=project_id, state=state, assignee_id=assignee_id
+            )
+            return {"tasks": [dict(r) for r in rows]}
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def task_edit(
+        task_id: int,
+        body: str | None = None,
+        title: str | None = None,
+        priority: str | None = None,
+        tags: str | None = None,
+        assignee_id: int | None = None,
+        version: int | None = None,
+    ) -> dict:
+        """Edit your own task fields (agents: body frozen after approval)."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            row = objects.edit_task(
+                conn,
+                actor,
+                task_id,
+                body=body,
+                title=title,
+                priority=priority,
+                tags=tags,
+                assignee_id=(objects.UNSET if assignee_id is None else assignee_id),
+                version=version,
+            )
+            return dict(row)
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def task_transition(
+        task_id: int, to: str, note: str = "", version: int | None = None
+    ) -> dict:
+        """Move a task through its states. approve/done/trash/not-done are
+        human-only; `to` may be `previous` for not-done/restore."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            row = statemachine.transition(
+                conn, task_id, to, actor, note=note, version=version
+            )
+            return dict(row)
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def todo_add(task_id: int, title: str) -> dict:
+        """Add a checklist item to a task (anyone, any time)."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            return {"id": objects.add_todo(conn, actor, task_id, title)}
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def todo_tick(todo_id: int, done: bool = True, version: int | None = None) -> dict:
+        """Tick/untick a todo; your identity is recorded."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            return dict(objects.tick_todo(conn, actor, todo_id, done, version=version))
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def task_proof_add(
+        task_id: int,
+        url: str,
+        kind: str | None = None,
+        provider: str | None = None,
+        repo: str | None = None,
+        number: str | None = None,
+    ) -> dict:
+        """Attach an MR/PR/commit/issue proof link to a task.
+
+        A forge URL (github/gitlab pull, merge_request, commit, issue) is
+        parsed into a structured ref; other URLs are stored unverified and
+        do NOT satisfy the building->review gate. Append-only — only humans
+        can trash proofs.
+        """
+        actor = _actor()
+        conn = _conn()
+        try:
+            return proofs_mod.add_proof(
+                conn,
+                actor,
+                task_id,
+                url,
+                provider=provider,
+                repo=repo,
+                number=number,
+                kind=kind,
+            )
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def task_proof_list(task_id: int) -> dict:
+        """List a task's proof links (with cached provider state)."""
+        _actor()
+        conn = _conn()
+        try:
+            return {"proofs": proofs_mod.list_proofs(conn, task_id)}
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def task_proof_check(task_id: int) -> dict:
+        """Refresh provider state for a task's MR/PR proofs.
+
+        Queries only fixed provider API hosts, and only when a read-only
+        provider token is configured; without one this is inert.
+        """
+        _actor()
+        conn = _conn()
+        try:
+            return {"proofs": proofs_mod.check_task(conn, task_id)}
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def discussion_start(
+        project_id: int, title: str, kind: str = "info", body: str = ""
+    ) -> dict:
+        """Start a discussion — THE comment surface. Link it for context."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            return {
+                "id": comms.create_discussion(
+                    conn, actor, project_id, title, kind=kind, body=body
                 )
             }
+        finally:
+            conn.close()
 
     @mcp.tool
-    def todos_list(
-        name: str | None = None,
-        project: str | int | None = None,
-        status: str = "open",
-    ) -> dict:
-        """List todos by ``status`` (open|done|archive|all; archive = finished
-        or archived). ``name`` also includes that clanker's session todos
-        (a v1 legacy; new todos are always shared)."""
-        with _db() as conn:
+    def discussions(project_id: int) -> dict:
+        """List a project's discussions."""
+        _actor()
+        conn = _conn()
+        try:
             return {
-                "todos": store.list_todos(
-                    conn,
-                    project_id=_resolve_project(project),
-                    name=name,
-                    status=status,
+                "discussions": [
+                    dict(r) for r in comms.list_discussions(conn, project_id)
+                ]
+            }
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def discussion_get(discussion_id: int) -> dict:
+        """Discussion with its comments (trashed hidden from agents)."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            return {
+                "comments": [
+                    dict(r) for r in comms.list_comments(conn, discussion_id, actor)
+                ]
+            }
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def comment_add(
+        discussion_id: int, body: str, parent_id: int | None = None
+    ) -> dict:
+        """Comment inside a discussion (nesting up to depth 4)."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            return {
+                "id": comms.add_comment(
+                    conn, actor, discussion_id, body, parent_id=parent_id
                 )
             }
+        finally:
+            conn.close()
 
     @mcp.tool
-    def todos_done(todo_id: int) -> dict:
-        """Mark a todo done (idempotent)."""
-        with _db() as conn:
-            store.done_todo(conn, todo_id)
-            return {"ok": True}
+    def chat_say(project_id: int, body: str) -> dict:
+        """Say something in the project chat."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            return {"id": comms.post_chat(conn, actor, project_id, body)}
+        finally:
+            conn.close()
 
     @mcp.tool
-    def todos_archive(todo_id: int) -> dict:
-        """Archive a finished (or abandoned) todo - it leaves the active list
-        and shows up in the archive view."""
-        with _db() as conn:
-            store.archive_todo(conn, todo_id)
-            return {"ok": True}
-
-    @mcp.tool
-    def notes_save(
-        author: str,
-        title: str,
-        body: str = "",
-        note_id: int | None = None,
-        tags: list[str] | None = None,
-        project: str | int | None = None,
-    ) -> dict:
-        """Create (or update, with ``note_id``) a note: a title plus a long
-        free-form body. Markdown '- [ ] item' lines render as a live checklist
-        in the UI, so notes can be todo lists. Great for scratch plans."""
-        with _db() as conn:
+    def chat_read(project_id: int, since_id: int = 0) -> dict:
+        """Read project chat after `since_id`."""
+        _actor()
+        conn = _conn()
+        try:
             return {
-                "id": store.save_note(
-                    conn,
-                    title,
-                    created_by=author,
-                    body=body,
-                    note_id=note_id,
-                    project_id=_resolve_project(project),
-                    tags=tags or "",
-                )
+                "messages": [
+                    dict(r)
+                    for r in comms.list_chat(conn, project_id, since_id=since_id)
+                ]
             }
+        finally:
+            conn.close()
 
     @mcp.tool
-    def notes_list(project: str | int | None = None) -> dict:
-        """List notes, most recently updated first."""
-        with _db() as conn:
-            return {"notes": store.list_notes(conn, _resolve_project(project))}
-
-    @mcp.tool
-    def wiki_save(
-        author: str,
-        title: str,
-        body: str = "",
-        slug: str | None = None,
-        project: str | int | None = None,
+    def question_ask(
+        project_id: int,
+        body: str,
+        to_identity_id: int | None = None,
+        to_group: str | None = None,
+        attach_type: str | None = None,
+        attach_id: int | None = None,
     ) -> dict:
-        """Create or update a wiki page (knowledge that should outlive the
-        week: how-tos, conventions, runbooks). ``slug`` defaults to the
-        title; re-saving with the same slug updates the page. Markdown body."""
-        with _db() as conn:
-            page = store.get_page(conn, store.slugify(slug or title))
+        """Ask a blocking question (one of to_identity_id / to_group).
+        Attaching freezes that object for everyone until answered."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            qid = questions_mod.ask(
+                conn,
+                actor,
+                project_id,
+                body,
+                to_identity_id=to_identity_id,
+                to_group=to_group,
+                attach_type=attach_type,
+                attach_id=attach_id,
+            )
+            return {"id": qid}
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def question_answer(question_id: int, answer: str) -> dict:
+        """Answer (addressee or group member only); unfreezes the object."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            return dict(questions_mod.answer(conn, actor, question_id, answer))
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def question_withdraw(question_id: int) -> dict:
+        """Withdraw your own question (admins may force-withdraw)."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            return dict(questions_mod.withdraw(conn, actor, question_id))
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def questions(
+        open_only: bool = True,
+        to_me: bool = False,
+        attach_type: str | None = None,
+        attach_id: int | None = None,
+    ) -> dict:
+        """List questions (optionally open only, addressed to you, attached
+        to one object)."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            rows = questions_mod.list_questions(
+                conn,
+                open_only=open_only,
+                to_actor=actor if to_me else None,
+                attach_type=attach_type,
+                attach_id=attach_id,
+            )
+            return {"questions": [dict(r) for r in rows]}
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def decision_record(project_id: int, title: str, context: str = "") -> dict:
+        """Record a proposed decision (humans accept/reject/supersede)."""
+        actor = _actor()
+        conn = _conn()
+        try:
             return {
-                "slug": store.save_page(
-                    conn,
-                    title,
-                    created_by=author,
-                    body=body,
-                    slug=slug,
-                    page_id=int(page["id"]) if page else None,
-                    project_id=_resolve_project(project),
-                )
+                "id": decisions.create(conn, actor, project_id, title, context=context)
             }
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def note_save(project_id: int, title: str, body: str = "", tags: str = "") -> dict:
+        """Create or update a project note by exact title (revision kept)."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            existing = conn.execute(
+                "SELECT id FROM notes WHERE project_id = ? AND title = ?"
+                " ORDER BY updated_at DESC LIMIT 1",
+                (project_id, title.strip()),
+            ).fetchone()
+            if existing:
+                row = knowledge.edit_note(
+                    conn, actor, existing["id"], body=body, tags=tags
+                )
+                return {"id": existing["id"], "note": dict(row)}
+            nid = knowledge.create_note(
+                conn, actor, project_id, title, body=body, tags=tags
+            )
+            return {"id": nid}
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def wiki_save(slug: str, title: str, body: str = "") -> dict:
+        """Create or update a global wiki page by slug (revision kept)."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            page = conn.execute(
+                "SELECT id FROM wiki WHERE slug = ?", (slug,)
+            ).fetchone()
+            if page:
+                row = knowledge.edit_wiki(conn, actor, slug, title=title, body=body)
+                return {"id": page["id"], "page": dict(row)}
+            wid = knowledge.create_wiki(conn, actor, slug, title, body=body)
+            return {"id": wid}
+        finally:
+            conn.close()
 
     @mcp.tool
     def wiki_get(slug: str) -> dict:
-        """Read a wiki page by slug. page is null if unknown."""
-        with _db() as conn:
-            return {"page": store.get_page(conn, slug)}
-
-    @mcp.tool
-    def chat_say(author: str, body: str, channel: str = "general") -> dict:
-        """Say something in the live chat (watercooler, quick questions).
-        Chat is ephemeral banter - decisions belong in posts."""
-        with _db() as conn:
-            return {"id": store.chat_send(conn, author, body, channel=channel)}
-
-    @mcp.tool
-    def chat_read(channel: str = "general", since: float = 0.0) -> dict:
-        """Read chat messages (optionally only those after epoch ``since``)."""
-        with _db() as conn:
-            return {"messages": store.chat_list(conn, channel=channel, since=since)}
-
-    @mcp.tool
-    def events(limit: int = 100, project: str | int | None = None) -> dict:
-        """Recent activity: who did what, newest first. With ``project``
-        (slug or id) only that project's events. Use it to see what other
-        clankers have been working on."""
-        with _db() as conn:
-            pid = _resolve_project(project) if project is not None else None
+        """Read a wiki page with its revision history."""
+        _actor()
+        conn = _conn()
+        try:
             return {
-                "events": store.list_events(
-                    conn, project_id=pid, limit=max(1, min(limit, 1000))
+                "page": dict(knowledge.get_wiki(conn, slug)),
+                "revisions": [dict(r) for r in knowledge.wiki_revisions(conn, slug)],
+            }
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def claims_set(paths: list[str], note: str = "") -> dict:
+        """Claim the paths you are about to work on; re-claim refreshes."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            return {"claims": claims.set_claims(conn, actor, paths, note=note)}
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def claims_check(path: str) -> dict:
+        """Who else has claimed this path (or parents/children)? Stale
+        claims are marked; coordinate via a discussion before touching."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            return {"claims": claims.check_claims(conn, path, actor)}
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def claims_release(paths: list[str]) -> dict:
+        """Release your claims on these paths."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            return {"claims": claims.release_claims(conn, actor, paths)}
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def link_add(from_type: str, from_id: int, to_type: str, to_id: int) -> dict:
+        """Link any two objects (first-class context, listed both ways)."""
+        actor = _actor()
+        conn = _conn()
+        try:
+            return {"id": links.create(conn, actor, from_type, from_id, to_type, to_id)}
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def context_get(obj_type: str, obj_id: int) -> dict:
+        """Links to/from an object, both directions."""
+        _actor()
+        conn = _conn()
+        try:
+            return {"links": links.context_for(conn, obj_type, obj_id)}
+        finally:
+            conn.close()
+
+    @mcp.tool
+    def events_feed(
+        since: int = 0, project_id: int | None = None, limit: int = 100
+    ) -> dict:
+        """The append-only event log (hash-chained)."""
+        _actor()
+        conn = _conn()
+        try:
+            return {
+                "events": events.feed(
+                    conn, since=since, project_id=project_id, limit=limit
                 )
             }
+        finally:
+            conn.close()
 
     @mcp.tool
-    def claims_set(agent: str, paths: list[str], note: str | None = None) -> dict:
-        """Claim the file/directory paths you are about to work on, with a
-        short note why. Others check claims before editing the same paths.
-        Re-claiming refreshes; claims go stale when your heartbeat stops."""
-        with _db() as conn:
-            return {"claims": store.set_claims(conn, agent, paths, note=note)}
+    async def wait(
+        obj_type: str | None = None,
+        obj_id: int | None = None,
+        project_id: int | None = None,
+        to_me: bool = True,
+        timeout: float = 30.0,
+    ) -> dict:
+        """Block until a matching event exists. to_me drains your durable
+        inbox (addressed work finds you even after downtime)."""
+        actor = _actor()
+        rows = await realtime.wait_for(
+            actor["id"],
+            obj_type=obj_type,
+            obj_id=obj_id,
+            project_id=project_id,
+            to_me=to_me,
+            timeout=timeout,
+            db_path=db.db_path(),
+        )
+        return {"events": rows}
 
     @mcp.tool
-    def claims_check(path: str, agent: str | None = None) -> dict:
-        """Check who else has claimed ``path`` or a parent/child of it (your
-        own claims excluded when you pass ``agent``). Stale claims are marked;
-        coordinate via a post before touching contested paths."""
-        with _db() as conn:
+    def search(
+        query: str, project_id: int | None = None, kind: str | None = None
+    ) -> dict:
+        """FTS search across tasks, discussions, comments, decisions,
+        questions, notes, wiki."""
+        _actor()
+        conn = _conn()
+        try:
             return {
-                "claims": store.check_claims(
-                    conn, path, agent=agent, heartbeat_timeout=_heartbeat_timeout()
-                )
+                "hits": search_mod.search(conn, query, project_id=project_id, kind=kind)
             }
-
-    @mcp.tool
-    def claims_release(agent: str, paths: list[str]) -> dict:
-        """Release your claims on paths when you are done with them."""
-        with _db() as conn:
-            store.release_claims(conn, agent, paths)
-            return {"ok": True}
-
-    @mcp.tool
-    def wait(post_id: int, timeout: int = 120, since: float | None = None) -> dict:
-        """Block until post ``post_id`` moves — a new comment lands, or the
-        post is closed — then return its activity snapshot. Use after asking
-        another clanker something on a post: instead of polling ``check``,
-        call ``wait`` once and stand by. ``timeout`` caps the block at
-        1-300 s (default 120); ``since`` is an epoch watermark (default:
-        when you called). On timeout the snapshot comes back with
-        ``"timeout": true`` — nothing happened yet. For continuous awareness
-        a script can tail ``GET /api/stream`` (SSE) instead."""
-        marker = since if since else time.time()
-        deadline = time.time() + min(max(int(timeout), 1), 300)
-        while True:
-            with _db() as conn:
-                snapshot = store.post_wait_snapshot(conn, post_id)
-            if snapshot is None:
-                raise ValueError(f"post {post_id} does not exist")
-            if (
-                snapshot["last_activity"] > marker
-                or (snapshot["closed_at"] or 0) > marker
-            ):
-                return snapshot
-            if time.time() >= deadline:
-                return {**snapshot, "timeout": True}
-            time.sleep(0.5)
+        finally:
+            conn.close()

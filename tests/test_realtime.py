@@ -1,196 +1,134 @@
-"""Realtime layer: SSE stream with replay, long-poll wait, chat-on-the-bus.
-
-Runs against a real uvicorn server on an ephemeral port: httpx's
-ASGITransport buffers response bodies, which an endless SSE generator
-would hang forever.
-"""
+"""Durable inbox, live bus, wait(), SSE stream."""
 
 import asyncio
-import json
-import socket
-import threading
 
 import pytest
-import uvicorn
-from httpx import AsyncClient
+from helpers_ids import clanker, fresh_db, human, superadmin
 
-TOKEN = "test-token"
-
-
-@pytest.fixture
-def anyio_backend() -> str:
-    return "asyncio"
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+from app import db, events, objects, questions, statemachine
+from app.bus import bus
+from app.realtime import wait_for
 
 
 @pytest.fixture
-async def server(tmp_path, monkeypatch):
-    monkeypatch.setenv("SLOPCLANKER_DB", str(tmp_path / "rt.db"))
-    monkeypatch.setenv("SLOPCLANKER_TOKEN", TOKEN)
-    from app.main import asgi_app
+def env(tmp_path):
+    conn = fresh_db(tmp_path)
+    boss = superadmin(conn)
+    agent = clanker(conn)
+    user = human(conn, "userx", "user", boss)
+    pid = objects.create_project(conn, agent, "proj")
+    db.db_path() if db.db_path() != ":memory:" else str(tmp_path / "t.db")
+    return conn, boss, agent, user, pid, str(tmp_path / "t.db")
 
-    port = _free_port()
-    config = uvicorn.Config(
-        asgi_app, host="127.0.0.1", port=port, log_level="warning", lifespan="off"
+
+def test_addressed_event_lands_in_inbox(env):
+    conn, _boss, agent, user, pid, _path = env
+    tid = objects.create_task(conn, agent, pid, "t", assignee_id=agent["id"])
+    statemachine.transition(conn, tid, "plan", agent)
+    statemachine.transition(conn, tid, "proposed", agent)
+    statemachine.transition(conn, tid, "approved", user)
+    statemachine.transition(conn, tid, "building", agent)
+    import time as _t
+
+    conn.execute(
+        "INSERT INTO proofs(task_id, provider, kind, url, added_by, added_at)"
+        " VALUES (?, 'github', 'pr', 'u', ?, ?)",
+        (tid, agent["id"], _t.time()),
     )
-    instance = uvicorn.Server(config)
-    thread = threading.Thread(target=instance.run, daemon=True)
-    thread.start()
-    for _ in range(100):
-        if instance.started:
-            break
-        await asyncio.sleep(0.05)
-    assert instance.started, "server did not start"
-    yield f"http://127.0.0.1:{port}"
-    instance.should_exit = True
-    thread.join(timeout=5)
+    conn.commit()
+    statemachine.transition(conn, tid, "review", agent)
+    statemachine.transition(conn, tid, "done", user)
+    ev_id = statemachine.transition(conn, tid, "previous", user, note="redo")["id"]
+    addressed = events.feed(conn, to_identity_id=agent["id"])
+    assert {e["verb"] for e in addressed} == {"task.created", "task.transitioned"}
+    unread = events.unread_for(conn, agent["id"])
+    assert len(unread) == 2
+    assert events.mark_read(conn, agent["id"], [u["id"] for u in unread]) == 2
+    assert events.unread_for(conn, agent["id"]) == []
+    assert events.mark_read(conn, agent["id"], [ev_id]) == 0
+    conn.close()
 
 
-@pytest.fixture
-async def client(server):
-    async with AsyncClient(base_url=server) as c:
-        yield c
+def test_group_question_fans_out_and_resolves(env):
+    conn, _boss, agent, _user, pid, _path = env
+    agent2 = clanker(conn, "clanker-y")
+    questions.ask(conn, agent, pid, "group q", to_group="clankers")
+    assert len(events.unread_for(conn, agent["id"])) == 1
+    assert len(events.unread_for(conn, agent2["id"])) == 1
+    q = conn.execute("SELECT id FROM questions LIMIT 1").fetchone()[0]
+    questions.answer(conn, agent2, q, "done")
+    assert events.unread_for(conn, agent2["id"]) == []
+    conn.close()
 
 
-def _auth() -> dict:
-    return {"Authorization": f"Bearer {TOKEN}"}
-
-
-async def _next_data(aiter) -> dict:
-    """Read SSE lines until one data: payload; return it parsed."""
-    while True:
-        line = await asyncio.wait_for(aiter.__anext__(), 5)
-        if line.startswith("data: "):
-            return json.loads(line[len("data: ") :])
+def test_bus_pubsub_bounded(env):
+    conn, _boss, agent, _user, _pid, _path = env
+    q = bus.subscribe()
+    events.emit(conn, agent["id"], "test.ev", "task", 1, payload={"x": 1})
+    got = q.get_nowait()
+    assert got["verb"] == "test.ev" and got["payload"] == {"x": 1}
+    for i in range(300):
+        events.emit(conn, agent["id"], "test.ev", "task", i)
+    assert q.qsize() <= 256
+    bus.unsubscribe(q)
+    size = q.qsize()
+    events.emit(conn, agent["id"], "test.ev", "task", 999)
+    assert q.qsize() == size
+    conn.close()
 
 
 @pytest.mark.anyio
-async def test_stream_sends_chat_live(client):
-    opened = await client.post(
-        "/api/posts", json={"title": "t", "body": "b", "author": "a"}, headers=_auth()
-    )
-    assert opened.status_code == 200
+async def test_wait_to_me_returns_and_marks_read(tmp_path):
+    path = str(tmp_path / "t.db")
+    conn = db.init_db(path)
+    boss = superadmin(conn)
+    agent = clanker(conn)
+    human(conn, "userx", "user", boss)
+    pid = objects.create_project(conn, agent, "proj")
+    questions.ask(conn, agent, pid, "for the agent", to_identity_id=agent["id"])
+    conn.close()
+    rows = await wait_for(agent_row_id(path), to_me=True, timeout=0.1, db_path=path)
+    assert len(rows) == 1 and rows[0]["verb"] == "question.asked"
+    rows2 = await wait_for(agent_row_id(path), to_me=True, timeout=0.1, db_path=path)
+    assert rows2 == []
 
-    async with client.stream(
-        "GET", "/api/stream?types=chat&name=listener", headers=_auth()
-    ) as resp:
-        assert resp.status_code == 200
-        assert resp.headers["content-type"].startswith("text/event-stream")
-        aiter = resp.aiter_lines()
-        hello = await asyncio.wait_for(aiter.__anext__(), 5)
-        assert hello.startswith(":")
 
-        said = await client.post(
-            "/api/chat",
-            json={"author": "speaker", "body": "ping over the wire"},
-            headers=_auth(),
-        )
-        assert said.status_code == 200
-
-        event = await _next_data(aiter)
-        assert event["type"] == "chat"
-        assert event["author"] == "speaker"
-        assert event["body"] == "ping over the wire"
-        assert isinstance(event["id"], int)
+def agent_row_id(path):
+    conn = db.connect(path)
+    row = conn.execute("SELECT id FROM identities WHERE kind = 'clanker'").fetchone()
+    conn.close()
+    return row[0]
 
 
 @pytest.mark.anyio
-async def test_stream_replays_missed_events(client):
-    first = await client.post(
-        "/api/posts", json={"title": "one", "body": "b", "author": "a"}, headers=_auth()
-    )
-    second = await client.post(
-        "/api/posts", json={"title": "two", "body": "b", "author": "a"}, headers=_auth()
-    )
-    feed = await client.get("/api/events", headers=_auth())
-    by_obj = {row["obj_id"]: row for row in feed.json()}
-    first_id = by_obj[str(first.json()["id"])]["id"]
-    second_id = by_obj[str(second.json()["id"])]["id"]
-    assert second_id > first_id
+async def test_wait_blocks_until_event(tmp_path):
+    path = str(tmp_path / "t.db")
+    conn = db.init_db(path)
+    superadmin(conn)
+    agent = clanker(conn)
+    pid = objects.create_project(conn, agent, "proj")
+    actor_id = agent["id"]
+    conn.close()
 
-    async with client.stream(
-        "GET", f"/api/stream?types=event&since_id={first_id}", headers=_auth()
-    ) as resp:
-        aiter = resp.aiter_lines()
-        opened = await asyncio.wait_for(aiter.__anext__(), 5)
-        assert opened.startswith(":")
-        event = await _next_data(aiter)
-        assert event["type"] == "event"
-        assert event["id"] == second_id
-        assert event["verb"]
+    async def poke():
+        await asyncio.sleep(0.2)
+        c = db.connect(path)
+        a = c.execute("SELECT * FROM identities WHERE id = ?", (actor_id,)).fetchone()
+        objects.create_task(c, a, pid, "late task")
+        c.close()
+
+    task = asyncio.create_task(poke())
+    rows = await wait_for(
+        actor_id, obj_type="task", to_me=False, timeout=5.0, db_path=path
+    )
+    await task
+    assert len(rows) == 1
+    assert rows[0]["verb"] == "task.created"
 
 
 @pytest.mark.anyio
-async def test_wait_returns_when_comment_lands(client):
-    created = await client.post(
-        "/api/posts",
-        json={"title": "q", "body": "anyone?", "author": "asker"},
-        headers=_auth(),
-    )
-    post_id = created.json()["id"]
-
-    result: dict = {}
-
-    async def waiter():
-        r = await client.get(f"/api/posts/{post_id}/wait?timeout=10", headers=_auth())
-        result["status"] = r.status_code
-        result["json"] = r.json()
-
-    task = asyncio.create_task(waiter())
-    await asyncio.sleep(1.0)
-    replied = await client.post(
-        f"/api/posts/{post_id}/comments",
-        json={"author": "answerer", "body": "here"},
-        headers=_auth(),
-    )
-    assert replied.status_code == 200
-    await asyncio.wait_for(task, 10)
-
-    assert result["status"] == 200
-    assert result["json"]["comments"] == 1
-    assert result["json"]["status"] == "open"
-
-
-@pytest.mark.anyio
-async def test_wait_times_out_with_204(client):
-    created = await client.post(
-        "/api/posts",
-        json={"title": "quiet", "body": "...", "author": "asker"},
-        headers=_auth(),
-    )
-    r = await client.get(
-        f"/api/posts/{created.json()['id']}/wait?timeout=1", headers=_auth()
-    )
-    assert r.status_code == 204
-    assert r.headers["x-slopclanker-timeout"] == "1"
-
-
-@pytest.mark.anyio
-async def test_wait_404_on_missing_post(client):
-    r = await client.get("/api/posts/999/wait", headers=_auth())
-    assert r.status_code == 404
-
-
-@pytest.mark.anyio
-async def test_stream_self_filter(client):
-    created = await client.post(
-        "/api/posts", json={"title": "t", "body": "b", "author": "a"}, headers=_auth()
-    )
-    async with client.stream(
-        "GET", "/api/stream?types=event&name=a", headers=_auth()
-    ) as resp:
-        aiter = resp.aiter_lines()
-        await asyncio.wait_for(aiter.__anext__(), 5)
-        commented = await client.post(
-            f"/api/posts/{created.json()['id']}/comments",
-            json={"author": "b", "body": "reply"},
-            headers=_auth(),
-        )
-        assert commented.status_code == 200
-        event = await _next_data(aiter)
-        assert event["actor"] == "b"
+async def test_wait_timeout_empty(tmp_path):
+    path = str(tmp_path / "t.db")
+    db.init_db(path).close()
+    rows = await wait_for(999, to_me=False, timeout=0.1, db_path=path)
+    assert rows == []

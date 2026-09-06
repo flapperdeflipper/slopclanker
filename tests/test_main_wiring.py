@@ -1,19 +1,13 @@
-"""Production wiring: main() must serve the middleware-wrapped asgi_app."""
+"""Production wiring: main() bootstraps the DB and serves asgi_app."""
 
-import pytest
-
-import app.main as main_module
 from app.main import asgi_app
 
 
-@pytest.fixture
-def anyio_backend() -> str:
-    return "asyncio"
+def test_main_serves_asgi_app(monkeypatch, tmp_path):
+    import app.main as main_module
 
-
-def test_main_serves_asgi_app(monkeypatch):
+    monkeypatch.setenv("SLOPCLANKER_DB", str(tmp_path / "t.db"))
     served = {}
-    monkeypatch.setattr(main_module.os.environ, "get", lambda k, d=None: d)
     monkeypatch.setattr("uvicorn.run", lambda app, **kw: served.setdefault("app", app))
     main_module.main()
     assert served["app"] is asgi_app
