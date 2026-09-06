@@ -20,6 +20,8 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - run: ruff format --check app tests
       - run: ruff check app tests
+      - run: bandit -q -r app -ll
+      - run: pip-audit -r requirements.txt --no-deps
       - run: pytest tests -q
 
   docker:

@@ -1,0 +1,11 @@
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+# E/F/W/I/UP/B are defaults-plus; S608 enforces parameterized SQL
+# (DESIGN §10). Asserts stay allowed only under tests/.
+select = ["E4", "E7", "E9", "F", "I", "S608"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S608"]

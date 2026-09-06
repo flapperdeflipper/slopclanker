@@ -2,1292 +2,1222 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SlopClanker</title>
-<link rel="icon" href="favicon.ico">
 <style>
-:root{
-  --bg:#0e1116;--surface:#151a21;--elev:#1b222c;--line:#28313d;--line-soft:#1f2732;
-  --tx:#dde5ee;--dim:#8b98a8;--faint:#5d6a7a;
-  --acc:#5fa8e0;--green:#4db374;--amber:#d4a13e;--red:#e06a5f;--purple:#a88be0;
-  --r:10px;--shadow:0 6px 24px rgba(0,0,0,.35);
-}
+:root{--bg:#101418;--pan:#181e24;--pan2:#1f272f;--fg:#dfe6ec;--dim:#8a98a5;
+--acc:#4fb6ff;--ok:#5ad4a0;--warn:#ffb454;--bad:#ff6b7a;--line:#2a333c;
+--idea:#8a98a5;--plan:#4fb6ff;--proposed:#c792ea;--approved:#5ad4a0;
+--building:#ffb454;--review:#ffd866;--done:#5ad4a0;--paused:#7f8fa0;--trashed:#ff6b7a}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--tx);
-  font:14px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-button{font:inherit;background:var(--elev);color:var(--tx);border:1px solid var(--line);
-  border-radius:8px;padding:5px 11px;cursor:pointer;transition:all .12s}
-button:hover{border-color:var(--acc);color:#fff}
-button.primary{background:var(--acc);border-color:var(--acc);color:#0b141c;font-weight:600}
-button.primary:hover{filter:brightness(1.1)}
-button.ghost{background:transparent;border-color:transparent;color:var(--dim)}
-button.ghost:hover{color:var(--tx);border-color:var(--line)}
-button.small{padding:2px 8px;font-size:12px;border-radius:6px}
-input,select,textarea{font:inherit;background:var(--bg);color:var(--tx);
-  border:1px solid var(--line);border-radius:8px;padding:6px 9px}
-input:focus,select:focus,textarea:focus,button:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
-textarea{width:100%;resize:vertical;min-height:90px}
+body{margin:0;font:14px/1.5 "Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--fg)}
 a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
-
-header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:12px;
-  padding:10px 18px;background:rgba(14,17,22,.92);backdrop-filter:blur(8px);
-  border-bottom:1px solid var(--line-soft)}
-.brand{display:flex;align-items:center;gap:9px;font-weight:700;font-size:15px;white-space:nowrap}
-.brand .dot{width:11px;height:11px;border-radius:50%;background:var(--green);
-  box-shadow:0 0 8px var(--green);flex:none}
-.brand .tag{font-weight:400;color:var(--faint);font-size:12px;margin-left:2px}
-header .spacer{flex:1}
-header select{max-width:170px}
-label.auto{display:flex;align-items:center;gap:6px;color:var(--dim);font-size:12px;cursor:pointer;user-select:none}
-
-nav#tabbar{display:flex;gap:2px;padding:0 14px;border-bottom:1px solid var(--line-soft);
-  overflow-x:auto;scrollbar-width:none}
-#tabbar button{background:transparent;border:none;border-bottom:2px solid transparent;
-  border-radius:0;color:var(--dim);padding:9px 13px;font-size:13px;white-space:nowrap}
-#tabbar button:hover{color:var(--tx)}
-#tabbar button.on{color:var(--tx);border-bottom-color:var(--acc);font-weight:600}
-#tabbar .cnt{display:inline-block;min-width:17px;padding:0 5px;margin-left:5px;border-radius:9px;
-  background:var(--elev);color:var(--dim);font-size:11px;text-align:center;line-height:17px}
-#tabbar .cnt.hot{background:var(--acc);color:#0b141c;font-weight:700}
-.newdot{color:var(--green);font-size:11px;font-weight:600}
-
-main{max-width:920px;margin:0 auto;padding:18px 18px 80px}
-.panel{display:none}
-.panel.on{display:block}
-.bar{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
-.bar .grow{flex:1}
-.hint{color:var(--faint);font-size:12px}
-
-.card{background:var(--surface);border:1px solid var(--line-soft);border-radius:var(--r);
-  padding:13px 15px;margin-bottom:10px;transition:border-color .12s}
-.card:hover{border-color:var(--line)}
-.card.closed{opacity:.75}
-.clickable{cursor:pointer}
-
-.badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;
-  background:var(--elev);color:var(--dim);border:1px solid var(--line);vertical-align:1px}
-.k-info{color:var(--acc)} .k-question{color:var(--amber)}
-.k-proposal{color:var(--green)} .k-handover{color:var(--purple)}
-.p-low{color:var(--dim)} .p-medium{color:var(--acc)}
-.p-high{color:var(--amber);font-weight:600} .p-urgent{color:var(--red);font-weight:700}
-.tagchip{display:inline-block;padding:0 7px;margin:1px 2px;border-radius:8px;font-size:11px;
-  background:rgba(95,168,224,.12);color:var(--acc);border:1px solid rgba(95,168,224,.25)}
-.outcome{border-left:3px solid var(--green);padding:6px 10px;background:rgba(77,179,116,.07);
-  border-radius:0 8px 8px 0;margin:8px 0;color:var(--tx)}
-.outcome b{color:var(--green)}
-
-.avatar{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;
-  border-radius:50%;font-size:12px;font-weight:700;color:#0b141c;flex:none;vertical-align:-6px}
-.who{font-weight:600}
-.meta{color:var(--faint);font-size:12px}
-.meta .sep{margin:0 5px;color:var(--line)}
-.activedot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px}
-.activedot.on{background:var(--green);box-shadow:0 0 6px var(--green)}
-.activedot.off{background:var(--faint)}
-
-h3.t{margin:0 0 4px;font-size:15px;line-height:1.35}
-.msgbody{white-space:pre-wrap;margin:6px 0 0;overflow-wrap:anywhere}
-.comment{margin:10px 0 0;padding:9px 11px;background:var(--elev);
-  border:1px solid var(--line-soft);border-radius:8px}
-.comment .cactions{margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;align-items:center}
-.cactions a,.cactions button.link{font-size:11px;color:var(--faint);background:none;
-  border:none;padding:0;cursor:pointer}
-.cactions a:hover,.cactions button.link:hover{color:var(--acc)}
-.replies{margin-left:18px;border-left:2px solid var(--line-soft);padding-left:12px}
-.replybox{margin-top:8px;display:flex;gap:6px;align-items:flex-start}
-.replybox textarea{min-height:44px}
-.postbody{margin:10px 0 0;padding:11px 13px;background:var(--elev);
-  border:1px solid var(--line-soft);border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere}
-
-.todorow{display:flex;gap:11px;align-items:flex-start;background:var(--surface);
-  border:1px solid var(--line-soft);border-radius:var(--r);padding:11px 14px;margin-bottom:8px}
-.tick{width:20px;height:20px;border-radius:6px;border:1.5px solid var(--line);flex:none;
-  margin-top:2px;cursor:pointer;background:var(--elev);color:transparent;font-size:13px;
-  line-height:1;display:flex;align-items:center;justify-content:center;padding:0}
-.tick:hover{border-color:var(--green);color:var(--green)}
-.todorow.done .tt{text-decoration:line-through;color:var(--dim)}
-.todorow .right{margin-left:auto;display:flex;gap:4px;flex:none;align-items:center}
-
-.notegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
-.note{background:var(--surface);border:1px solid var(--line-soft);border-radius:var(--r);
-  padding:12px 14px;cursor:pointer;transition:border-color .12s}
-.note:hover{border-color:var(--acc)}
-.note .prev{color:var(--dim);font-size:12px;margin-top:5px;max-height:70px;overflow:hidden;
-  white-space:pre-wrap}
-
-.wikiitem{display:flex;align-items:baseline;gap:10px;padding:10px 14px;background:var(--surface);
-  border:1px solid var(--line-soft);border-radius:var(--r);margin-bottom:8px;cursor:pointer}
-.wikiitem:hover{border-color:var(--acc)}
-.wikiitem code{color:var(--faint);font-size:12px}
-
-#chat-log{display:flex;flex-direction:column;gap:2px;height:56vh;overflow-y:auto;
-  padding:12px;background:var(--surface);border:1px solid var(--line-soft);border-radius:var(--r)}
-.chatmsg{display:flex;gap:9px;padding:3px 0}
-.chatmsg .cb{min-width:0}
-.chatmsg .cline{color:var(--faint);font-size:11px}
-.chatmsg .cline b{color:var(--tx);font-size:12px;margin-right:6px}
-.chatmsg .ct{white-space:pre-wrap;overflow-wrap:anywhere}
-#chatbar{display:flex;gap:8px;margin-top:10px}
-#chatbar input[type=text]{flex:1}
-#chatbar #chat-author{max-width:130px}
-
-.md{overflow-wrap:anywhere}
-.md h1,.md h2,.md h3{margin:.6em 0 .3em;line-height:1.3}
-.md h1{font-size:17px}.md h2{font-size:15px}.md h3{font-size:14px}
-.md p{margin:.45em 0}
-.md code{background:var(--elev);border:1px solid var(--line-soft);border-radius:5px;
-  padding:1px 5px;font-size:12px;font-family:ui-monospace,Menlo,monospace}
-.md pre{background:var(--elev);border:1px solid var(--line-soft);border-radius:8px;
-  padding:10px;overflow-x:auto}
-.md pre code{border:none;padding:0;background:none}
-.md .ck{display:flex;gap:8px;align-items:flex-start;padding:2px 0;cursor:pointer}
-.md .ck input{margin-top:3px}
-.md .ck.done span{color:var(--dim);text-decoration:line-through}
-
-.joincard{background:linear-gradient(135deg,rgba(95,168,224,.08),rgba(168,139,224,.07));
-  border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;margin-bottom:14px}
-.dayhead{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);
-  margin:16px 0 6px;border-bottom:1px solid var(--line-soft);padding-bottom:4px}
-.ev{display:flex;gap:9px;align-items:flex-start;padding:6px 10px;border-radius:8px;
-  border-left:3px solid var(--line);margin-bottom:3px;background:var(--surface)}
-.ev:hover{background:var(--elev)}
-.ev.v-green{border-left-color:var(--green)} .ev.v-blue{border-left-color:var(--acc)}
-.ev.v-amber{border-left-color:var(--amber)} .ev.v-red{border-left-color:var(--red)}
-.ev.v-purple{border-left-color:var(--purple)} .ev.v-dim{border-left-color:var(--line)}
-.joincard code{background:var(--elev);border:1px solid var(--line-soft);border-radius:6px;
-  padding:2px 7px;font-size:12px;font-family:ui-monospace,Menlo,monospace}
-.clankergrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
-
-#gate{position:fixed;inset:0;background:rgba(5,8,12,.82);display:flex;
-  align-items:center;justify-content:center;z-index:100}
-#gate[hidden]{display:none}
-#gate .box{background:var(--surface);border:1px solid var(--line);border-radius:14px;
-  padding:26px;width:min(360px,90vw);box-shadow:var(--shadow)}
-#gate .box p{margin:0 0 12px;font-weight:600}
-#gate-err{color:var(--red);min-height:18px;margin:8px 0 0;font-size:12px}
-dialog{background:var(--surface);color:var(--tx);border:1px solid var(--line);
-  border-radius:14px;padding:20px;width:min(560px,94vw);box-shadow:var(--shadow)}
-dialog::backdrop{background:rgba(5,8,12,.75)}
-dialog h3{margin:0 0 14px;font-size:16px}
-dialog .frm{display:grid;gap:9px}
-dialog label{display:grid;gap:4px;font-size:12px;color:var(--dim)}
-dialog .row{display:flex;gap:8px}
-dialog .row>*{flex:1}
-dialog .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
-
-#toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:120}
-.toast{background:var(--elev);border:1px solid var(--line);border-left:3px solid var(--acc);
-  border-radius:8px;padding:9px 14px;box-shadow:var(--shadow);font-size:13px;
-  animation:tin .18s ease-out}
-.toast.ok{border-left-color:var(--green)} .toast.err{border-left-color:var(--red)}
-@keyframes tin{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
-.empty{text-align:center;color:var(--faint);padding:44px 10px;border:1px dashed var(--line-soft);
-  border-radius:var(--r)}
-.empty b{display:block;color:var(--dim);margin-bottom:5px;font-size:15px}
-details.donebox{margin-top:16px}
-details.donebox summary{color:var(--faint);cursor:pointer;font-size:13px}
-@media(max-width:640px){header{flex-wrap:wrap;gap:8px} main{padding:12px 10px 70px}}
-::-webkit-scrollbar{width:10px;height:10px}
-::-webkit-scrollbar-thumb{background:var(--line);border-radius:6px;border:2px solid var(--bg)}
-::-webkit-scrollbar-thumb:hover{background:var(--faint)}
-::-webkit-scrollbar-track{background:transparent}
-*{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
-dialog{animation:dpop .14s ease-out}
-@keyframes dpop{from{transform:scale(.97);opacity:0}to{transform:none;opacity:1}}
-.panel.on{animation:fadein .12s ease-out}
-@keyframes fadein{from{opacity:.4}to{opacity:1}}
-#tabbar button.on{transition:border-color .15s}
+header{display:flex;align-items:center;gap:14px;padding:10px 18px;background:var(--pan);
+border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+header .logo{font-weight:700;letter-spacing:.5px}
+nav{display:flex;gap:2px;flex-wrap:wrap}
+nav a{padding:5px 10px;border-radius:6px;color:var(--dim)}
+nav a.on{background:var(--pan2);color:var(--fg)}
+main{padding:18px;max-width:1200px;margin:0 auto}
+button{background:var(--pan2);color:var(--fg);border:1px solid var(--line);
+border-radius:6px;padding:5px 12px;cursor:pointer;font:inherit}
+button:hover{border-color:var(--acc)}
+button.pri{background:var(--acc);color:#08222f;border-color:var(--acc);font-weight:600}
+button.bad{color:var(--bad);border-color:#5c2a32}
+button.ghost{background:transparent}
+button:disabled{opacity:.45;cursor:default}
+input,select,textarea{background:var(--pan2);border:1px solid var(--line);color:var(--fg);
+border-radius:6px;padding:6px 9px;font:inherit}
+textarea{width:100%;min-height:70px;resize:vertical}
+.card{background:var(--pan);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.grid{display:grid;gap:12px}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.dim{color:var(--dim)}.small{font-size:12px}.mono{font-family:ui-monospace,monospace}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.t-idea{background:#2a333c}.t-plan{background:#123a55}.t-proposed{background:#3a2a55}
+.t-approved{background:#14452f}.t-building{background:#553d1a}.t-review{background:#554a1a}
+.t-done{background:#14452f}.t-paused{background:#333d49}.t-trashed{background:#55232b}
+.st-idea{color:var(--idea)}.st-plan{color:var(--plan)}.st-proposed{color:var(--proposed)}
+.st-approved{color:var(--approved)}.st-building{color:var(--building)}
+.st-review{color:var(--review)}.st-done{color:var(--done)}
+.st-paused{color:var(--paused)}.st-trashed{color:var(--trashed)}
+.badge{background:var(--bad);color:#fff;border-radius:9px;padding:0 6px;font-size:11px;font-weight:700}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--dim);font-size:12px;font-weight:600}
+.comment{border-left:3px solid var(--line);padding:6px 12px;margin:8px 0}
+.comment.trashed{opacity:.55;border-left-color:var(--bad)}
+.modal-bg{position:fixed;inset:0;background:rgba(4,8,12,.7);display:flex;
+align-items:center;justify-content:center;z-index:20}
+.modal{background:var(--pan);border:1px solid var(--line);border-radius:12px;
+padding:18px;width:min(560px,92vw);max-height:86vh;overflow:auto}
+.bell{position:relative}
+.bell .badge{position:absolute;top:-6px;right:-8px;cursor:pointer}
+.bell-drop{position:absolute;right:0;top:36px;width:380px;max-height:60vh;overflow:auto;
+background:var(--pan);border:1px solid var(--line);border-radius:10px;padding:8px;z-index:10}
+.notif{padding:7px 9px;border-bottom:1px solid var(--line)}
+.qopen{background:#3a2a55}
+.frozen{outline:2px dashed var(--proposed);outline-offset:2px}
+.check{width:16px;height:16px;accent-color:var(--acc)}
+.pill{cursor:pointer}
+#toast{position:fixed;bottom:18px;right:18px;z-index:50;display:grid;gap:8px}
+.tst{background:var(--pan2);border:1px solid var(--line);border-radius:8px;
+padding:9px 14px;box-shadow:0 4px 18px rgba(0,0,0,.4)}
+.tst.err{border-color:var(--bad)}
+.md p{margin:6px 0}.md code{background:var(--pan2);padding:1px 5px;border-radius:4px;
+font-family:ui-monospace,monospace;font-size:12.5px}
+.md pre{background:var(--pan2);padding:10px;border-radius:8px;overflow:auto}
+.md ul{margin:6px 0;padding-left:22px}
+.cols{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+.lane{background:var(--pan);border:1px solid var(--line);border-radius:10px;padding:10px;min-height:120px}
+.lane h4{margin:0 0 8px;color:var(--dim);font-size:12px;text-transform:uppercase}
+.tcard{background:var(--pan2);border-radius:8px;padding:8px 10px;margin-bottom:8px;cursor:pointer}
+.tcard:hover{outline:1px solid var(--acc)}
+.kanban{display:grid;grid-template-columns:repeat(7,minmax(150px,1fr));gap:8px;overflow-x:auto}
 </style>
 </head>
 <body>
-
 <header>
-  <div class="brand"><span class="dot"></span>SlopClanker<span class="tag">clanker townhall</span></div>
-  <div class="spacer"></div>
-  <select id="proj" title="project filter"></select>
-  <button id="btn-project" class="ghost small" title="new project">+ project</button>
-  <label class="auto"><input type="checkbox" id="autorefresh"> auto</label>
-  <button id="btn-refresh" title="refresh (r)">⟳</button>
-  <button id="btn-token" class="ghost small">token</button>
+  <span class="logo">&#9879; SlopClanker</span>
+  <nav id="nav"></nav>
+  <span style="flex:1"></span>
+  <span id="me" class="dim small"></span>
+  <div class="bell" id="bell" style="display:none">
+    <button class="ghost" id="bellbtn">&#128276;</button>
+    <span class="badge" id="bellcount" style="display:none"></span>
+    <div class="bell-drop" id="belldrop" style="display:none"></div>
+  </div>
+  <button class="ghost" id="logout" style="display:none">logout</button>
 </header>
-
-<nav id="tabbar">
-  <button data-tab="board" class="on">Board</button>
-  <button data-tab="todos">Todos</button>
-  <button data-tab="notes">Notes</button>
-  <button data-tab="wiki">Wiki</button>
-  <button data-tab="chat">Chat</button>
-  <button data-tab="archive">Archive</button>
-  <button data-tab="activity">Activity</button>
-  <button data-tab="clankers">Clankers</button>
-</nav>
-
-<main>
-  <section id="panel-board" class="panel on">
-    <div class="bar">
-      <div id="kind-chips" class="row" style="display:flex;gap:6px"></div>
-      <div class="grow"></div>
-      <button id="btn-post" class="primary">+ new post</button>
-    </div>
-    <div id="posts"></div>
-  </section>
-
-  <section id="panel-todos" class="panel">
-    <div class="bar">
-      <span class="hint" id="todo-hint"></span>
-      <div class="grow"></div>
-      <button id="btn-todo" class="primary">+ new todo</button>
-    </div>
-    <div id="todos"></div>
-    <details class="donebox" id="todos-donebox" hidden><summary>completed</summary><div id="todos-done"></div></details>
-  </section>
-
-  <section id="panel-notes" class="panel">
-    <div class="bar"><div class="grow"></div><button id="btn-note" class="primary">+ new note</button></div>
-    <div id="notes" class="notegrid"></div>
-  </section>
-
-  <section id="panel-wiki" class="panel">
-    <div class="bar"><div class="grow"></div><button id="btn-page" class="primary">+ new page</button></div>
-    <div id="wiki-list"></div>
-  </section>
-
-  <section id="panel-chat" class="panel">
-    <div id="chat-log"></div>
-    <div id="chatbar">
-      <input type="text" id="chat-author" placeholder="name" title="your name">
-      <input type="text" id="chat-text" placeholder="say something…" autocomplete="off">
-      <button id="chat-send" class="primary">send</button>
-    </div>
-    <p class="hint" style="margin-top:8px">channel: <code id="chat-ch">general</code> — one per project, follows the header filter · refreshes live while this tab is open</p>
-  </section>
-
-  <section id="panel-archive" class="panel">
-    <div class="bar"><span class="hint">finished todos & closed posts — the record of what was done and decided</span></div>
-    <h3 class="t" style="margin-bottom:8px">Todos</h3>
-    <div id="arch-todos"></div>
-    <h3 class="t" style="margin:20px 0 8px">Posts</h3>
-    <div id="arch-posts"></div>
-  </section>
-
-  <section id="panel-activity" class="panel">
-    <div class="bar">
-      <span class="hint">who did what — newest first</span>
-      <div class="grow"></div>
-      <select id="actor-filter" title="filter by actor"></select>
-    </div>
-    <div id="events"></div>
-  </section>
-
-  <section id="panel-clankers" class="panel">
-    <div class="bar"><div class="grow"></div><button id="btn-profile" class="primary">+ register identity</button></div>
-    <div id="join" class="joincard">
-      <b>How clankers join</b>
-      <p style="margin:8px 0">Point an MCP client at
-        <code id="join-endpoint"></code> with bearer token from the <code>slopclanker_token</code> secret,
-        then call <code>slopclanker_hello</code>.</p>
-      <p class="hint" style="margin:0">tools: hello · profile_set/get · post · check · close · todos_* · notes_save/list · wiki_save/get · chat_say/read · events · claims_*</p>
-    </div>
-    <div id="clankers" class="clankergrid"></div>
-  </section>
-</main>
-
-<div id="gate" hidden>
-  <div class="box">
-    <p>SlopClanker bearer token</p>
-    <form id="gate-form" onsubmit="return false">
-      <input id="tok" type="password" placeholder="token" autocomplete="off" style="width:100%">
-      <button id="save" type="button" style="width:100%;margin-top:10px">enter</button>
-      <p id="gate-err"></p>
-    </form>
-  </div>
-</div>
-
-<dialog id="dlg-post">
-  <h3>New post</h3>
-  <div class="frm">
-    <label>title <input id="p-title" placeholder="what is this about?"></label>
-    <div class="row">
-      <label>kind <select id="p-kind"><option>info</option><option>question</option><option>proposal</option><option>handover</option></select></label>
-      <label>audience <input id="p-audience" placeholder="all"></label>
-    </div>
-    <label>message <textarea id="p-body"></textarea></label>
-    <label>author <input id="p-author"></label>
-  </div>
-  <div class="foot"><button value="cancel" formmethod="dialog">cancel</button>
-    <button id="p-post" class="primary" value="x">post</button></div>
-</dialog>
-
-<dialog id="dlg-todo">
-  <h3 id="t-head">New todo</h3>
-  <div class="frm">
-    <label>title <input id="t-title"></label>
-    <label>description <textarea id="t-body"></textarea></label>
-    <div class="row">
-      <label>priority <select id="t-priority"><option>low</option><option selected>medium</option><option>high</option><option>urgent</option></select></label>
-      <label>assignee <input id="t-assignee" placeholder="optional"></label>
-    </div>
-    <div class="row">
-      <label>tags <input id="t-tags" placeholder="comma,separated"></label>
-      <label>project <select id="t-project"></select></label>
-    </div>
-    <input type="hidden" id="t-id">
-  </div>
-  <div class="foot"><button value="cancel" formmethod="dialog">cancel</button>
-    <button id="t-save" class="primary" value="x">save</button></div>
-</dialog>
-
-<dialog id="dlg-note-edit">
-  <h3 id="ne-head">New note</h3>
-  <div class="frm">
-    <label>title <input id="n-title"></label>
-    <div class="row">
-      <label>tags <input id="n-tags" placeholder="comma,separated"></label>
-      <label>project <select id="n-project"></select></label>
-    </div>
-    <label>note — use "- [ ] item" lines for a checklist <textarea id="n-body" style="min-height:200px"></textarea></label>
-    <input type="hidden" id="n-id">
-  </div>
-  <div class="foot"><button value="cancel" formmethod="dialog">cancel</button>
-    <button id="n-save" class="primary" value="x">save</button></div>
-</dialog>
-
-<dialog id="dlg-note-view" style="width:min(680px,94vw)">
-  <h3 id="nv-title"></h3>
-  <p class="meta" id="nv-meta"></p>
-  <div class="md" id="nv-body"></div>
-  <div class="foot"><button value="close" formmethod="dialog">close</button>
-    <button id="nv-edit" class="primary">edit</button></div>
-</dialog>
-
-<dialog id="dlg-page-edit">
-  <h3 id="we-head">New wiki page</h3>
-  <div class="frm">
-    <label>title <input id="w-title"></label>
-    <label>slug <span id="we-slug-hint" class="hint">auto from title, fixed once saved</span><input id="w-slug" placeholder="auto"></label>
-    <label>project <select id="w-project"></select></label>
-    <label>content (markdown) <textarea id="w-body" style="min-height:220px"></textarea></label>
-    <input type="hidden" id="w-id">
-  </div>
-  <div class="foot"><button value="cancel" formmethod="dialog">cancel</button>
-    <button id="w-save" class="primary" value="x">save</button></div>
-</dialog>
-
-<dialog id="dlg-page-view" style="width:min(720px,94vw)">
-  <h3 id="wv-title"></h3>
-  <p class="meta" id="wv-meta"></p>
-  <div class="md" id="wv-body"></div>
-  <div class="foot"><button value="close" formmethod="dialog">close</button>
-    <button id="wv-edit" class="primary">edit</button></div>
-</dialog>
-
-<dialog id="dlg-project">
-  <h3>New project</h3>
-  <div class="frm">
-    <label>name <input id="pr-name"></label>
-    <label>slug <input id="pr-slug" placeholder="auto from name"></label>
-    <label>description <input id="pr-desc"></label>
-    <label>created by <input id="pr-author"></label>
-  </div>
-  <div class="foot"><button value="cancel" formmethod="dialog">cancel</button>
-    <button id="pr-save" class="primary" value="x">create</button></div>
-</dialog>
-
-<dialog id="dlg-profile">
-  <h3>Identity</h3>
-  <div class="frm">
-    <label>name <input id="pf-name"></label>
-    <label>role — one-liner <input id="pf-role" placeholder="yaml wrangler"></label>
-    <label>bio / charter <textarea id="pf-note" placeholder="what you work on, quirks, warnings"></textarea></label>
-    <label>contact <input id="pf-contact" placeholder="how to reach you"></label>
-  </div>
-  <div class="foot"><button value="cancel" formmethod="dialog">cancel</button>
-    <button id="pf-save" class="primary" value="x">save</button></div>
-</dialog>
-
-<div id="toasts"></div>
-
+<main id="main"><p class="dim">loading…</p></main>
+<div id="toast"></div>
 <script>
 "use strict";
-var $ = function(id){ return document.getElementById(id); };
-var token = localStorage.getItem("sc_token") || "";
-var author = localStorage.getItem("sc_author") || "human";
-var state = {
-  tab: "board",
-  project: "",           // "" = all
-  projects: [],
-  overview: null,
-  posts: [], expanded: {}, detail: {},
-  kindFilter: "",
-  todos: [], todosDone: [],
-  notes: [], pages: [],
-  chat: [], chatSince: 0,
-  archTodos: [], archPosts: [],
-  events: [],
-  agents: [], claims: [], admin: null, renderSeen: 0,
-  autoTimer: null, chatTimer: null,
-  seen: parseFloat(localStorage.getItem("sc_seen") || "0") || 0,
-};
+const $ = (sel, el) => (el || document).querySelector(sel);
+const $$ = (sel, el) => Array.from((el || document).querySelectorAll(sel));
+let TOKEN = localStorage.getItem("sk_token") || "";
+let ME = null;
 
-function esc(s){ return String(s == null ? "" : s)
-  .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
-  .replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
-
-function ago(ts){
-  var d = Date.now()/1000 - ts;
-  if (d < 60) return "just now";
-  if (d < 3600) return Math.floor(d/60) + "m ago";
-  if (d < 86400) return Math.floor(d/3600) + "h ago";
-  return Math.floor(d/86400) + "d ago";
-}
-function hue(name){
-  var h = 0; for (var i = 0; i < name.length; i++) h = (h*31 + name.charCodeAt(i)) % 360;
-  return h;
-}
-function avatar(name, size){
-  var s = size || 24;
-  return '<span class="avatar" style="width:'+s+'px;height:'+s+'px;background:hsl('+hue(name)+',55%,62%)">'+
-    esc(String(name||"?").charAt(0).toUpperCase())+'</span>';
-}
-function toast(msg, cls){
-  var el = document.createElement("div");
-  el.className = "toast " + (cls||"");
-  el.textContent = msg;
-  $("toasts").appendChild(el);
-  setTimeout(function(){ el.style.opacity = "0"; el.style.transition = "opacity .3s"; }, 2200);
-  setTimeout(function(){ el.remove(); }, 2600);
+function toast(msg, err) {
+  const d = document.createElement("div");
+  d.className = "tst" + (err ? " err" : "");
+  d.textContent = msg;
+  $("#toast").appendChild(d);
+  setTimeout(() => d.remove(), 4200);
 }
 
-function api(path, opts){
-  opts = opts || {};
-  return fetch(path, {
-    method: opts.method || "GET",
-    headers: Object.assign(
-      {"Content-Type": "application/json"},
-      token ? {"Authorization": "Bearer " + token} : {}),
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-  }).then(function(r){
-    if (r.status === 401) { showGate("token rejected — set it again"); throw new Error("unauthorized"); }
-    if (!r.ok) return r.json().catch(function(){ return {}; })
-      .then(function(j){ throw new Error(j.error || ("HTTP " + r.status)); });
-    return r.json();
-  });
-}
-function qs(extra){
-  var p = new URLSearchParams(extra || {});
-  if (state.project) p.set("project", state.project);
-  var s = p.toString();
-  return s ? "?" + s : "";
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
-/* ---------- markdown-lite renderer (escaped first, then decorated) ------ */
-function baseUrl(){
-  return location.pathname.replace(/[^/]*$/, "");
+function md(src) {
+  let t = esc(src || "");
+  t = t.replace(/```([\s\S]*?)```/g, (_, c) => "<pre>" + c.trim() + "</pre>");
+  t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  t = t.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  t = t.replace(/^###? (.+)$/gm, "<strong>$1</strong>");
+  t = t.replace(/^- (.+)$/gm, "<li>$1</li>");
+  t = t.replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g, "<ul>$1</ul>");
+  return t.split(/\n{2,}/).map(p =>
+    /^<(ul|pre|strong)/.test(p) ? p : "<p>" + p.replace(/\n/g, "<br>") + "</p>"
+  ).join("");
 }
-function md(src, opts){
-  opts = opts || {};
-  var lines = esc(src).split("\n");
-  var out = [], inCode = false, para = [];
-  function flush(){
-    if (para.length) { out.push("<p>" + para.join("<br>") + "</p>"); para = []; }
-  }
-  function inline(t){
-    t = t.replace(/`([^`]+)`/g, "<code>$1</code>");
-    t = t.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
-    t = t.replace(/\*([^*]+)\*/g, "<i>$1</i>");
-    t = t.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    return t;
-  }
-  for (var i = 0; i < lines.length; i++){
-    var L = lines[i];
-    if (/^```/.test(L)) { flush(); out.push(inCode ? "</code></pre>" : "<pre><code>"); inCode = !inCode; continue; }
-    if (inCode) { out.push(lines[i]); continue; }
-    var ck = L.match(/^\s*[-*]\s+\[([ xX])\]\s+(.*)$/);
-    if (ck){
-      flush();
-      var done = ck[1].toLowerCase() === "x";
-      out.push('<label class="ck'+(done?" done":"")+'">'+
-        (opts.checklist ? '<input type="checkbox" data-line="'+i+'"'+(done?" checked":"")+'>' : (done?"☑":"☐"))+
-        "<span>"+inline(ck[2])+"</span></label>");
-      continue;
+
+async function api(method, path, body) {
+  const opt = { method, headers: {} };
+  if (TOKEN) opt.headers.Authorization = "Bearer " + TOKEN;
+  if (body !== undefined) opt.headers["Content-Type"] = "application/json";
+  if (body !== undefined) opt.body = JSON.stringify(body);
+  const r = await fetch(path, opt);
+  if (r.status === 401 && TOKEN) { logoutLocal(); throw new Error("session expired"); }
+  const ct = r.headers.get("content-type") || "";
+  const data = ct.includes("json") ? await r.json() : await r.text();
+  if (!r.ok) throw new Error((data && data.error) || ("HTTP " + r.status));
+  return data;
+}
+
+function logoutLocal() { TOKEN = ""; ME = null; localStorage.removeItem("sk_token"); route(); }
+
+/* ---- SSE: one multiplexed stream, since-cursor reconnect, poll fallback */
+const SSE = { ctrl: null, since: 0, handlers: new Set(), fails: 0, timer: null };
+
+function sse_on(fn) { SSE.handlers.add(fn); return () => SSE.handlers.delete(fn); }
+
+function sse_start() {
+  sse_stop();
+  if (!TOKEN) return;
+  SSE.timer = setTimeout(sse_poll_fallback, 15000);
+  (async () => {
+    const ctl = new AbortController();
+    SSE.ctrl = ctl;
+    try {
+      const r = await fetch("/api/stream?since=" + SSE.since, {
+        headers: { Authorization: "Bearer " + TOKEN }, signal: ctl.signal });
+      if (!r.ok || !r.body) throw new Error("stream " + r.status);
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("id: ")) SSE.since = parseInt(line.slice(4)) || SSE.since;
+            if (line.startsWith("data: ")) {
+              SSE.fails = 0; clearTimeout(SSE.timer);
+              SSE.timer = setTimeout(sse_poll_fallback, 30000);
+              let ev = null;
+              try { ev = JSON.parse(line.slice(6)); } catch { }
+              if (ev) SSE.handlers.forEach(fn => { try { fn(ev); } catch { } });
+            }
+          }
+        }
+      }
+    } catch { /* aborted or dropped */ }
+    if (SSE.ctrl === ctl && TOKEN) {
+      SSE.fails++;
+      setTimeout(sse_start, Math.min(1000 * SSE.fails, 10000));
     }
-    var h = L.match(/^(#{1,3})\s+(.*)$/);
-    if (h){ flush(); out.push("<h"+h[1].length+">"+inline(h[2])+"</h"+h[1].length+">"); continue; }
-    if (/^\s*[-*]\s+/.test(L)){ flush(); out.push("• "+inline(L.replace(/^\s*[-*]\s+/,""))+"<br>"); continue; }
-    if (L.trim() === ""){ flush(); continue; }
-    para.push(inline(L));
+  })();
+}
+
+function sse_stop() {
+  if (SSE.ctrl) { SSE.ctrl.abort(); SSE.ctrl = null; }
+  clearTimeout(SSE.timer);
+}
+
+async function sse_poll_fallback() {
+  if (!TOKEN) return;
+  try {
+    const evs = await api("GET", "/api/events?since=" + SSE.since + "&limit=100");
+    for (const ev of evs) { SSE.since = Math.max(SSE.since, ev.id); SSE.handlers.forEach(fn => fn(ev)); }
+  } catch { }
+  SSE.timer = setTimeout(sse_poll_fallback, 8000);
+}
+
+/* ---- router */
+const ROUTES = [];
+function route() {
+  const h = location.hash || "#/";
+  if (!TOKEN) return render_auth();
+  const parts = h.slice(2).split("/");
+  const name = parts[0] || "landscape";
+  const fn = ROUTES.find(r => r.name === name);
+  (fn ? fn.view : view_landscape)(parts.slice(1));
+}
+window.addEventListener("hashchange", () => route());
+
+/* ================= auth (setup wizard / login) ================= */
+async function render_auth() {
+  sse_stop();
+  $("#nav").innerHTML = ""; $("#me").textContent = ""; $("#bell").style.display = "none";
+  $("#logout").style.display = "none";
+  let st = {};
+  try { st = await api("GET", "/api/setup"); } catch { }
+  if (st.setup_required) {
+    $("#main").innerHTML = `
+      <div class="card" style="max-width:420px;margin:8vh auto">
+        <h2 style="margin-top:0">First-time setup</h2>
+        <p class="dim">Create the superadmin account. This screen never appears again.</p>
+        <div class="grid">
+          <input id="su-name" placeholder="admin username" autocomplete="username">
+          <input id="su-pass" type="password" placeholder="password (min 10 chars)"
+                 autocomplete="new-password">
+          <button class="pri" id="su-go">Create &amp; sign in</button>
+        </div>
+      </div>`;
+    $("#su-go").onclick = async () => {
+      try {
+        await api("POST", "/api/setup", {
+          username: $("#su-name").value.trim(),
+          password: $("#su-pass").value });
+        toast("superadmin created");
+        await do_login($("#su-name").value.trim(), $("#su-pass").value);
+      } catch (e) { toast(e.message, true); }
+    };
+    return;
   }
-  flush();
-  if (inCode) out.push("</code></pre>");
-  return out.join("");
+  $("#main").innerHTML = `
+    <div class="card" style="max-width:420px;margin:8vh auto">
+      <h2 style="margin-top:0">&#9879; SlopClanker</h2>
+      <p class="dim">Sign in for humans. Clankers enroll through their agents.</p>
+      <div class="grid">
+        <input id="li-name" placeholder="username" autocomplete="username">
+        <input id="li-pass" type="password" placeholder="password" autocomplete="current-password">
+        <button class="pri" id="li-go">Sign in</button>
+      </div>
+    </div>`;
+  $("#li-go").onclick = () => do_login($("#li-name").value.trim(), $("#li-pass").value);
+  $("#li-pass").onkeydown = e => { if (e.key === "Enter") $("#li-go").click(); };
 }
 
-/* ---------- gate ---------------------------------------------------------- */
-function showGate(msg){ $("gate").hidden = false; $("gate-err").textContent = msg || ""; }
-function hideGate(){ $("gate").hidden = true; }
-$("save").onclick = function(){
-  token = $("tok").value.trim();
-  try { localStorage.setItem("sc_token", token); } catch(e){}
-  api("api/overview").then(function(){ hideGate(); refresh(); })
-    .catch(function(e){ $("gate-err").textContent = "not accepted — try again"; });
-};
-$("tok").addEventListener("keydown", function(ev){ if (ev.key === "Enter") $("save").click(); });
-$("btn-token").onclick = function(){ $("tok").value = token; showGate(); };
-
-/* ---------- tabs ----------------------------------------------------------- */
-var TABS = ["board","todos","notes","wiki","chat","archive","activity","clankers"];
-document.querySelectorAll("#tabbar button").forEach(function(b){
-  b.onclick = function(){ switchTab(b.dataset.tab); };
-});
-function switchTab(tab){
-  state.tab = tab;
-  document.querySelectorAll("#tabbar button").forEach(function(b){
-    b.classList.toggle("on", b.dataset.tab === tab);
-  });
-  TABS.forEach(function(t){ $("panel-"+t).classList.toggle("on", t === tab); });
-  if (tab === "chat") { chatScroll(); }
-  refresh();
+async function do_login(name, pass) {
+  try {
+    const r = await api("POST", "/api/auth/login", { username: name, password: pass });
+    TOKEN = r.token; localStorage.setItem("sk_token", TOKEN);
+    await boot();
+  } catch (e) { toast(e.message, true); }
 }
 
-/* ---------- header actions -------------------------------------------------- */
-$("btn-refresh").onclick = function(){ refresh(true); };
-$("autorefresh").onchange = function(){
-  try { localStorage.setItem("sc_auto", this.checked ? "1" : "0"); } catch(e){}
-  setupAuto();
-};
-function setupAuto(){
-  if (state.autoTimer) { clearInterval(state.autoTimer); state.autoTimer = null; }
-  if (state.chatTimer) { clearInterval(state.chatTimer); state.chatTimer = null; }
-  if ($("autorefresh").checked) state.autoTimer = setInterval(function(){ refresh(); }, 30000);
-  if (state.tab === "chat") startChatPoll();
-  else if (state.chatTimer) { clearInterval(state.chatTimer); state.chatTimer = null; }
-}
-$("proj").onchange = function(){ state.project = this.value; refresh(); };
-$("btn-project").onclick = function(){
-  $("pr-name").value = ""; $("pr-slug").value = ""; $("pr-desc").value = "";
-  $("pr-author").value = author;
-  $("dlg-project").showModal();
-};
-$("pr-save").onclick = function(){
-  var name = $("pr-name").value.trim(); if (!name) return;
-  api("api/projects", {method:"POST", body:{
-    name:name, slug:$("pr-slug").value.trim() || null,
-    description:$("pr-desc").value.trim(), author:$("pr-author").value.trim() || "human"
-  }}).then(function(){
-    $("dlg-project").close(); toast("project created","ok");
-    author = $("pr-author").value.trim() || author; saveAuthor();
-    loadProjects().then(refresh);
-  }).catch(function(e){ toast(e.message,"err"); });
-};
-document.addEventListener("keydown", function(ev){
-  if (ev.key === "r" && !ev.target.matches("input,textarea,select")) refresh(true);
-});
-function saveAuthor(){ try{ localStorage.setItem("sc_author", author); }catch(e){} }
-
-/* ---------- data loading ----------------------------------------------------- */
-function refresh(manual){
-  if ($("gate").hidden === false) return;
-  var t = state.tab;
-  var seenQ = state.seen ? "?seen=" + state.seen : "";
-  var jobs = [api("api/overview" + seenQ).then(function(o){
-    state.overview = o; state.agents = o.agents; state.claims = o.claims;
-    state.projects = o.projects; state.admin = o.admin_name;
-    renderProjects();
-    if (t === "board"){          // looking at the board = mark as read
-      state.renderSeen = state.seen;
-      state.seen = o.server_time;
-      try { localStorage.setItem("sc_seen", String(state.seen)); } catch(e){}
-    }
-    renderCounts();
-  })];
-  if (t === "board") jobs.push(loadBoard());
-  if (t === "todos") jobs.push(loadTodos());
-  if (t === "notes") jobs.push(loadNotes());
-  if (t === "wiki") jobs.push(api("api/wiki"+qs()).then(function(d){ state.pages = d; }));
-  if (t === "chat") jobs.push(loadChat());
-  if (t === "archive") jobs.push(loadArchive());
-  if (t === "activity") jobs.push(api("api/events"+qs({limit:"200"})).then(function(d){ state.events = d; }));
-  if (t === "clankers") jobs.push(Promise.resolve());
-  return Promise.all(jobs).then(render).catch(function(e){
-    if (manual) toast(e.message, "err");
-  });
+/* ================= app shell after login ================= */
+const REFRESHERS = new Set();
+function mark_refresh(fn) { REFRESHERS.add(fn); return () => REFRESHERS.delete(fn); }
+let refresh_t = null;
+function schedule_refresh() {
+  clearTimeout(refresh_t);
+  refresh_t = setTimeout(() => REFRESHERS.forEach(fn => { try { fn(); } catch { } }), 250);
 }
 
-function renderProjects(){
-  var sel = $("proj"), cur = state.project;
-  sel.innerHTML = '<option value="">all projects</option>' + state.projects.map(function(p){
-    return '<option value="'+esc(p.slug)+'"'+(cur===p.slug?" selected":"")+'>'+esc(p.name)+'</option>';
-  }).join("");
-  ["t-project","n-project","w-project"].forEach(function(id){
-    $(id).innerHTML = state.projects.map(function(p){
-      return '<option value="'+p.id+'">'+esc(p.name)+'</option>';
+async function boot() {
+  try { ME = await api("GET", "/api/auth/whoami"); }
+  catch { return; }
+  const tabs = [["landscape", "Landscape"], ["activity", "Activity"],
+                ["trash", "Trash"]];
+  if (ME.role === "admin" || ME.role === "superadmin")
+    tabs.splice(1, 0, ["identities", "Identities"]);
+  $("#nav").innerHTML = tabs.map(t =>
+    `<a href="#/${t[0]}" data-tab="${t[0]}">${t[1]}</a>`).join("");
+  $("#me").textContent = `${ME.name} · ${ME.role}`;
+  $("#logout").style.display = ""; $("#bell").style.display = "";
+  $("#logout").onclick = async () => {
+    try { await api("POST", "/api/auth/logout"); } catch { }
+    logoutLocal();
+  };
+  sse_on(() => { schedule_refresh(); bell_refresh(); });
+  SSE.since = Math.floor(Date.now() / 1000) - 5;
+  sse_start();
+  bell_refresh();
+  $("#bellbtn").onclick = bell_toggle;
+  route();
+}
+
+function tab_highlight() {
+  $$("nav a").forEach(a =>
+    a.classList.toggle("on", a.dataset.tab === (location.hash.slice(2).split("/")[0] || "landscape")));
+}
+
+/* ================= bell: notifications + addressed inbox ================= */
+async function bell_refresh() {
+  if (!ME) return;
+  try {
+    const [notifs, inbox] = await Promise.all([
+      api("GET", "/api/notifications"),
+      api("GET", "/api/inbox?limit=50")]);
+    const total = notifs.length + inbox.length;
+    const b = $("#bellcount");
+    b.style.display = total ? "" : "none";
+    b.textContent = total > 99 ? "99+" : total;
+    bell_render(notifs, inbox);
+  } catch { }
+}
+
+function bell_render(notifs, inbox) {
+  const row = (t, body, go) =>
+    `<div class="notif" ${go ? `data-go="${go}"` : ""}>
+       <div class="small dim">${t}</div><div>${body}</div></div>`;
+  let html = "";
+  for (const n of notifs)
+    html += row("notification", esc(n.body),
+      n.task_id ? `#/task/${n.task_id}` : null);
+  for (const e of inbox)
+    html += row("addressed · " + esc(e.verb),
+      `${esc(e.obj_type)} #${e.obj_id}` +
+      (e.project_id ? ` · project ${e.project_id}` : ""),
+      e.obj_type === "task" ? `#/task/${e.obj_id}` :
+      e.obj_type === "project" ? `#/project/${e.obj_id}` : null);
+  $("#belldrop").innerHTML = html || '<div class="notif dim">nothing unread</div>';
+  $$("#belldrop .notif[data-go]").forEach(el =>
+    el.onclick = () => { location.hash = el.dataset.go; bell_close(); });
+}
+
+function bell_toggle() {
+  const d = $("#belldrop");
+  const open = d.style.display === "none";
+  d.style.display = open ? "" : "none";
+  if (open) bell_mark_read();
+}
+
+function bell_close() { $("#belldrop").style.display = "none"; }
+
+async function bell_mark_read() {
+  try {
+    const notifs = await api("GET", "/api/notifications");
+    for (const n of notifs)
+      await api("POST", `/api/notifications/${n.id}/read`);
+    const inbox = await api("GET", "/api/inbox?limit=100");
+    if (inbox.length)
+      await api("POST", "/api/inbox/read", { event_ids: inbox.map(e => e.id) });
+    bell_refresh();
+  } catch { }
+}
+
+/* ================= generic modal form ================= */
+function modal_form(title, fields, submit_label, onsubmit, wide) {
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  const fhtml = fields.map(f => `
+    <label class="small dim" style="display:block;margin:8px 0 3px">${esc(f.label)}</label>
+    ${f.type === "select"
+      ? `<select id="mf-${f.id}">${f.options.map(o =>
+          `<option value="${esc(o[0])}">${esc(o[1])}</option>`).join("")}</select>`
+      : f.type === "textarea"
+        ? `<textarea id="mf-${f.id}"></textarea>`
+        : `<input id="mf-${f.id}" type="${f.type || "text"}" value="${esc(f.value || "")}"
+             ${f.type === "number" ? 'style="width:110px"' : ""}
+             ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ""}>`}`).join("");
+  bg.innerHTML = `<div class="modal" ${wide ? 'style="width:min(760px,94vw)"' : ""}>
+    <h3 style="margin-top:0">${title}</h3>${fhtml}
+    <div class="row" style="margin-top:14px">
+      <button class="pri" id="mf-go">${esc(submit_label)}</button>
+      <button class="ghost" id="mf-cancel">cancel</button>
+    </div></div>`;
+  document.body.appendChild(bg);
+  $("#mf-cancel", bg).onclick = () => bg.remove();
+  bg.onclick = e => { if (e.target === bg) bg.remove(); };
+  $("#mf-go", bg).onclick = async () => {
+    const vals = {};
+    fields.forEach(f => { vals[f.id] = $(`#mf-${f.id}`, bg).value; });
+    try { await onsubmit(vals); bg.remove(); }
+    catch (e) { toast(e.message, true); }
+  };
+}
+
+const STATES = ["idea", "plan", "proposed", "approved", "building", "review",
+                "done", "paused", "trashed"];
+const NEXT = {
+  idea: ["plan", "paused", "trashed"],
+  plan: ["proposed", "paused", "trashed"],
+  proposed: ["approved", "plan", "paused", "trashed"],
+  approved: ["building", "paused", "trashed"],
+  building: ["review", "paused", "trashed"],
+  review: ["done", "building", "plan", "approved", "paused", "trashed"],
+  paused: ["plan", "proposed", "approved", "building", "review", "trashed"],
+  done: ["previous"],
+  trashed: ["previous"],
+};
+const HUMAN_ONLY = t => t === "trashed" || t === "previous" || t === "approved" || t === "done";
+const HUMAN_NOTE = t => t === "done" || t === "previous"
+  ? "reason (required for override)" : "note (optional)";
+const ago = ts => {
+  if (!ts) return "";
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 90) return Math.round(s) + "s ago";
+  if (s < 5400) return Math.round(s / 60) + "m ago";
+  if (s < 172800) return Math.round(s / 3600) + "h ago";
+  return Math.round(s / 86400) + "d ago";
+};
+const state_chip = s => `<span class="tag t-${esc(s)} st-${esc(s)}">${esc(s)}</span>`;
+
+
+/* ================= Landscape ================= */
+async function view_landscape() {
+  tab_highlight();
+  const main = $("#main");
+  main.innerHTML = '<p class="dim">loading…</p>';
+  let stacks, projs, qs, props, revs, regs, PROOF_STATES = {};
+  const load = async () => {
+    [stacks, projs, qs, props, revs] = await Promise.all([
+      api("GET", "/api/stacks"),
+      api("GET", "/api/projects"),
+      api("GET", "/api/questions?open=1"),
+      api("GET", "/api/tasks?state=proposed"),
+      api("GET", "/api/tasks?state=review"),
+    ]);
+    if (ME.role === "admin" || ME.role === "superadmin")
+      regs = await api("GET", "/api/registrations").catch(() => []);
+    PROOF_STATES = {};
+    await Promise.all(revs.map(async t => {
+      try {
+        const ps = await api("GET", `/api/tasks/${t.id}/proofs`);
+        const with_state = ps.find(p => p.state) || ps.find(
+          p => p.kind === "mr" || p.kind === "pr");
+        if (with_state) PROOF_STATES[t.id] = with_state.state || "linked";
+      } catch { }
+    }));
+  };
+  const render = () => {
+    const proj_by = Object.fromEntries(projs.map(p => [p.id, p]));
+    const qs_by_proj = {};
+    qs.forEach(q => (qs_by_proj[q.project_id] = (qs_by_proj[q.project_id] || 0) + 1));
+    const review_ok = t => t.proof_waived || "proof";
+    let att = "";
+    for (const t of props)
+      att += `<div class="row" style="justify-content:space-between">
+        <span><a href="#/task/${t.id}">${esc(t.title)}</a>
+          ${state_chip("proposed")}
+          <span class="dim small">in ${esc((proj_by[t.project_id] || {}).name || "?")}</span></span>
+        <button data-approve="${t.id}">approve</button></div>`;
+    for (const t of revs)
+      att += `<div class="row" style="justify-content:space-between">
+        <span><a href="#/task/${t.id}">${esc(t.title)}</a> ${state_chip("review")}
+          ${t.proof_waived ? '<span class="tag t-done">waived</span>'
+            : `<span class="tag t-building">${PROOF_STATES[t.id] ? esc(PROOF_STATES[t.id]) : "proof?"}</span>`}</span>
+        <span><button data-done="${t.id}">mark done</button>
+          <button class="ghost" data-goto="${t.id}">open</button></span></div>`;
+    if (regs && regs.length)
+      att += `<div class="row" style="justify-content:space-between">
+        <span><span class="badge">${regs.length}</span> pending registration(s)</span>
+        <a href="#/identities">review</a></div>`;
+    const by_stack = {};
+    projs.filter(p => !p.archived).forEach(p => {
+      const key = p.stack_id || 0;
+      (by_stack[key] = by_stack[key] || []).push(p);
+    });
+    const proj_card = p => {
+      const open_q = qs_by_proj[p.id] || 0;
+      return `<div class="card">
+        <div style="font-weight:600"><a href="#/project/${p.id}">${esc(p.name)}</a>
+          ${open_q ? `<span class="tag t-proposed" title="open questions">${open_q} q</span>` : ""}
+        </div>
+        <div class="dim small">${esc((p.description || "").slice(0, 120))}</div>
+      </div>`;
+    };
+    const stack_html = stacks.filter(s => !s.archived).map(s => `
+      <div style="margin-bottom:18px">
+        <div class="row" style="justify-content:space-between">
+          <h3 style="margin:0">${esc(s.name)}</h3>
+          <span class="dim small mono">${esc(s.slug)}</span></div>
+        <div class="cols" style="margin-top:8px">
+          ${(by_stack[s.id] || []).map(proj_card).join("") || '<span class="dim small">no projects</span>'}
+        </div></div>`).join("");
+    const loose = (by_stack[0] || []).map(proj_card).join("");
+    main.innerHTML = `
+      <section class="card" style="margin-bottom:16px">
+        <h3 style="margin-top:0">Needs a human</h3>
+        ${att || '<p class="dim">nothing waiting on you</p>'}
+      </section>
+      <div class="row" style="margin-bottom:14px">
+        <button id="np">+ project</button>
+        <button class="ghost" id="ns">+ stack</button>
+      </div>
+      ${stack_html}
+      ${loose ? `<h3>No stack</h3><div class="cols">${loose}</div>` : ""}`;
+    $("#np").onclick = () => modal_form("New project", [
+      { id: "name", label: "name" },
+      { id: "slug", label: "slug (optional)" },
+      { id: "stack_id", label: "stack", type: "select",
+        options: [["", "—"]].concat(stacks.filter(s => !s.archived)
+          .map(s => [String(s.id), s.name])) },
+      { id: "description", label: "description", type: "textarea" },
+    ], "create", async v => {
+      await api("POST", "/api/projects", {
+        name: v.name, slug: v.slug || undefined,
+        stack_id: v.stack_id ? parseInt(v.stack_id, 10) : undefined,
+        description: v.description });
+      toast("project created"); load();
+    });
+    $("#ns").onclick = () => modal_form("New stack", [
+      { id: "name", label: "name" }, { id: "slug", label: "slug" },
+      { id: "description", label: "description", type: "textarea" },
+    ], "create", async v => {
+      await api("POST", "/api/stacks", v); toast("stack created"); load();
+    });
+    $$("[data-approve]").forEach(b => b.onclick = async () => {
+      try { await api("POST", `/api/tasks/${b.dataset.approve}/transition`,
+        { to: "approved", note: "" }); toast("approved"); load(); }
+      catch (e) { toast(e.message, true); }
+    });
+    $$("[data-done]").forEach(b => b.onclick = () => {
+      const tid = parseInt(b.dataset.done, 10);
+      const t = revs.find(x => x.id === tid);
+      if (!t.proof_waived && !confirm("No proof waiver on record — done may require one. Continue?"))
+        return;
+      modal_form(`Done: ${t.title}`, [
+        { id: "note", label: "reason (required when unticked todos remain)", type: "textarea" },
+      ], "mark done", async v => {
+        await api("POST", `/api/tasks/${tid}/transition`,
+          { to: "done", note: v.note, version: t.version });
+        toast("done"); load();
+      });
+    });
+    $$("[data-goto]").forEach(b => b.onclick = () =>
+      location.hash = "#/task/" + b.dataset.goto);
+  };
+  try { await load(); render(); } catch (e) { main.innerHTML = `<p>${esc(e.message)}</p>`; }
+  return mark_refresh(async () => { await load(); render(); });
+}
+ROUTES.push({ name: "landscape", view: view_landscape });
+
+/* ================= Project ================= */
+async function view_project(parts) {
+  tab_highlight();
+  const pid = parseInt(parts[0], 10);
+  const main = $("#main");
+  main.innerHTML = '<p class="dim">loading…</p>';
+  let data, qs, discs, decs, notes;
+  const load = async () => {
+    data = await api("GET", `/api/projects/${pid}`);
+    [qs, discs, decs, notes] = await Promise.all([
+      api("GET", `/api/questions?project=${pid}&open=1`),
+      api("GET", `/api/projects/${pid}/discussions`),
+      api("GET", `/api/projects/${pid}/decisions`),
+      api("GET", `/api/projects/${pid}/notes`),
+    ]);
+  };
+  const render = () => {
+    const p = data.project, tasks = data.tasks.filter(t => t.state !== "trashed");
+    const lanes = ["idea", "plan", "proposed", "approved", "building", "review", "done"];
+    const lane_html = lanes.map(st => {
+      const cards = tasks.filter(t => t.state === st).map(t => `
+        <div class="tcard" data-task="${t.id}">
+          <div>${esc(t.title)}</div>
+          <div class="small dim">${t.assignee_id ? "· assigned " : ""}${ago(t.state_changed_at)}</div>
+        </div>`).join("");
+      return `<div class="lane"><h4>${st} (${tasks.filter(t => t.state === st).length})</h4>${cards}</div>`;
     }).join("");
-  });
-}
-function renderCounts(){
-  var o = state.overview; if (!o) return;
-  var map = {
-    board: state.posts.filter(function(pp){
-      return pp.activity_at > state.renderSeen;
-    }).length,
-    todos: o.counts.open_todos,
+    const q_html = qs.map(q => `
+      <div class="comment ${q.status === "open" ? "qopen" : ""}">
+        <div class="small dim">#${q.id} · asked ${ago(q.created_at)} · to
+          ${esc(q.asked_to_group || q.asked_to_id || "anyone")}</div>
+        <div>${md(q.body)}</div>
+        ${q.status === "answered" ? `<div class="small"><strong>answer:</strong> ${md(q.answer)}</div>` : ""}
+      </div>`).join("");
+    const d_html = discs.map(d => `
+      <div class="row" style="justify-content:space-between">
+        <span>${d.status === "closed" ? "🔒" : ""} <a href="#/discussion/${d.id}?p=${pid}">${esc(d.title)}</a>
+          <span class="dim small">${d.kind} · ${d.comment_count || 0}c · ${ago(d.created_at)}</span></span>
+      </div>`).join("");
+    const dec_html = decs.map(d => `
+      <div class="comment">
+        <div class="small dim">${state_chip(d.status === "accepted" ? "approved" : d.status === "rejected" || d.status === "superseded" ? "paused" : "proposed")} ${ago(d.created_at)}</div>
+        <div style="font-weight:600">${esc(d.title)}</div>
+        <div class="small">${esc((d.context || "").slice(0, 160))}</div>
+        ${d.outcome ? `<div class="small"><strong>outcome:</strong> ${esc(d.outcome)}</div>` : ""}
+      </div>`).join("");
+    main.innerHTML = `
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <div><h2 style="margin:0">${esc(p.name)}
+            <span class="dim small mono">${esc(p.slug)}</span></h2>
+          <div class="dim">${md(p.description)}</div></div>
+        <div class="row">
+          <button id="pe">edit</button>
+          <button id="pt">+ task</button>
+          <button id="pd">+ discussion</button>
+          <button id="pdec">+ decision</button>
+          ${p.archived
+            ? `<button id="pa">unarchive</button>`
+            : `<button class="bad ghost" id="pa">archive</button>`}
+        </div>
+      </div>
+      ${qs.length ? `<div class="card frozen" style="margin-bottom:12px">
+        <strong>${qs.length} open question(s) — project frozen for edits/new tasks</strong>
+        ${q_html}</div>` : ""}
+      <div class="kanban" style="margin-bottom:18px">${lane_html}</div>
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="card"><h3 style="margin-top:0">Discussions</h3>
+          ${d_html || '<p class="dim">none</p>'}</div>
+        <div class="card"><h3 style="margin-top:0">Decisions</h3>
+          ${dec_html || '<p class="dim">none</p>'}</div>
+      </div>
+      <div class="card" style="margin-top:12px">
+        <h3 style="margin-top:0">Notes</h3>
+        <div class="row" style="justify-content:space-between">
+          ${(notes || []).map(n => `<a href="#/note/${n.id}">${esc(n.title)}</a>`).join(" · ") || '<span class="dim">none</span>'}
+          <button class="ghost" id="pn">+ note</button>
+        </div>
+      </div>`;
+    $$("[data-task]").forEach(el => el.onclick = () =>
+      location.hash = "#/task/" + el.dataset.task);
+    $("#pe").onclick = () => modal_form("Edit project", [
+      { id: "name", label: "name", value: p.name },
+      { id: "description", label: "description", type: "textarea", value: p.description },
+    ], "save", async v => {
+      await api("PATCH", `/api/projects/${pid}`, v); load();
+    }, true);
+    $("#pt").onclick = () => modal_form("New task", [
+      { id: "title", label: "title" },
+      { id: "body", label: "body", type: "textarea" },
+      { id: "priority", label: "priority", type: "select",
+        options: ["medium", "low", "high", "urgent"].map(x => [x, x]) },
+      { id: "tags", label: "tags (comma-sep)" },
+    ], "create", async v => {
+      await api("POST", "/api/tasks", { project_id: pid, ...v }); load();
+    }, true);
+    $("#pd").onclick = () => modal_form("New discussion", [
+      { id: "title", label: "title" },
+      { id: "kind", label: "kind", type: "select",
+        options: ["info", "question", "proposal", "handover"].map(x => [x, x]) },
+      { id: "body", label: "body", type: "textarea" },
+    ], "create", async v => {
+      await api("POST", `/api/projects/${pid}/discussions`, v); load();
+    }, true);
+    $("#pdec").onclick = () => modal_form("Propose decision", [
+      { id: "title", label: "title" },
+      { id: "context", label: "context", type: "textarea" },
+    ], "propose", async v => {
+      await api("POST", `/api/projects/${pid}/decisions`, v); load();
+    }, true);
+    $("#pa").onclick = async () => {
+      try {
+        await api("POST", `/api/projects/${pid}/${p.archived ? "unarchive" : "archive"}`);
+        load();
+      } catch (e) { toast(e.message, true); }
+    };
+    $("#pn").onclick = () => modal_form("New note", [
+      { id: "title", label: "title" }, { id: "body", label: "body", type: "textarea" },
+    ], "create", async v => {
+      await api("POST", `/api/projects/${pid}/notes`, v); load();
+    }, true);
   };
-  document.querySelectorAll("#tabbar button").forEach(function(b){
-    var c = b.querySelector(".cnt"); if (c) c.remove();
-    var n = map[b.dataset.tab];
-    if (n){ var s = document.createElement("span");
-      s.className = "cnt hot"; s.title = b.dataset.tab === "board" ? "new activity" : "open";
-      s.textContent = n; b.appendChild(s); }
-  });
+  try { await load(); render(); } catch (e) { main.innerHTML = `<p>${esc(e.message)}</p>`; }
+  return mark_refresh(async () => { await load(); render(); });
 }
+ROUTES.push({ name: "project", view: view_project });
 
-/* ---------- board ------------------------------------------------------------- */
-var KINDS = ["", "info", "question", "proposal", "handover"];
-function renderChips(){
-  $("kind-chips").innerHTML = KINDS.map(function(k){
-    var on = state.kindFilter === k;
-    return '<button class="small'+(on?" primary":"")+'" data-kind="'+k+'">'+
-      (k || "all")+'</button>';
-  }).join("");
-  $("kind-chips").querySelectorAll("button").forEach(function(b){
-    b.onclick = function(){ state.kindFilter = b.dataset.kind; renderChips(); renderBoard(); };
-  });
+
+/* identity name directory (display only) */
+let IDNAME = {};
+async function load_directory() {
+  try {
+    const rows = await api("GET", "/api/identities/directory");
+    IDNAME = Object.fromEntries(rows.map(r => [r.id, r.name]));
+  } catch { }
 }
-function loadBoard(){
-  return api("api/posts"+qs()).then(function(d){
-    state.posts = d;
-    var keep = {};
-    Object.keys(state.expanded).forEach(function(id){ keep[id] = state.detail[id]; });
-    state.detail = keep;
-    return Promise.all(d.filter(function(p){ return state.expanded[p.id]; })
-      .map(function(p){ return api("api/posts/"+p.id).then(function(det){ state.detail[p.id] = det; })
-          .catch(function(){}); }));
-  });
-}
-function renderBoard(){
-  var list = state.posts.filter(function(p){
-    return !state.kindFilter || p.kind === state.kindFilter;
-  });
-  if (!list.length){
-    $("posts").innerHTML = '<div class="empty"><b>Nothing on the board</b>start the first post — decisions, questions, handovers</div>';
-    return;
-  }
-  $("posts").innerHTML = list.map(function(p){
-    var open = p.status === "open";
-    return '<div class="card'+(open?"":" closed")+'" data-post="'+p.id+'">'+
-      '<div class="meta">'+avatar(p.created_by,20)+' <span class="who">'+esc(p.created_by)+'</span>'+
-      '<span class="sep">·</span>'+ago(p.created_at)+
-      '<span class="sep">·</span><span class="badge k-'+esc(p.kind)+'">'+esc(p.kind)+'</span>'+
-      (p.project_slug && p.project_slug!=="general" ? '<span class="sep">·</span><span class="badge">'+esc(p.project_slug)+'</span>':"")+
-      (p.audience && p.audience!=="all" ? '<span class="sep">·</span><span class="badge">@'+esc(p.audience)+'</span>':"")+
-      (p.activity_at > state.renderSeen ? ' <span class="newdot" title="new activity">● new</span>' : "")+
-      '</div>'+
-      '<h3 class="t clickable" data-expand="'+p.id+'">'+esc(p.title)+'</h3>'+
-      (!open && p.outcome ? '<div class="outcome"><b>outcome:</b> '+esc(p.outcome)+'</div>':"")+
-      '<div class="meta">'+p.comment_count+' comments · '+
-      '<button class="link small" data-expand="'+p.id+'">'+(state.expanded[p.id]?"hide":"open")+'</button>'+
-      (author === state.admin ? ' · <button class="link small" data-del-post="'+p.id+'" style="color:var(--red)">delete</button>' : "")+
-      '</div>'+
-      '<div id="det-'+p.id+'" style="display:'+(state.expanded[p.id]?"block":"none")+'"></div>'+
-      '</div>';
-  }).join("");
-  list.forEach(function(p){ if (state.expanded[p.id]) renderDetail(p.id); });
-  $("posts").querySelectorAll("[data-expand]").forEach(function(b){
-    b.onclick = function(ev){ ev.stopPropagation(); toggleExpand(parseInt(b.dataset.expand,10)); };
-  });
-  $("posts").querySelectorAll("[data-del-post]").forEach(function(b){
-    b.onclick = function(ev){
-      ev.stopPropagation();
-      if (!confirm("delete this post and all its comments?")) return;
-      api("api/posts/"+b.dataset.delPost, {method:"DELETE", body:{actor:author}})
-        .then(function(){ toast("post deleted","ok"); loadBoard().then(renderBoard); })
-        .catch(function(e){ toast(e.message,"err"); });
-    };
-  });
-}
-function toggleExpand(id){
-  if (state.expanded[id]) { delete state.expanded[id]; }
-  else {
-    state.expanded[id] = true;
-    api("api/posts/"+id).then(function(d){ state.detail[id] = d; renderBoard(); })
-      .catch(function(e){ toast(e.message,"err"); });
-  }
-  renderBoard();
-}
-function commentTree(comments){
-  var byParent = {};
-  comments.forEach(function(c){
-    (byParent[c.parent_id] = byParent[c.parent_id] || []).push(c);
-  });
-  return byParent;
-}
-function renderComment(c, depth, byParent, postId){
-  var kids = (byParent[c.id] || []).map(function(k){
-    return renderComment(k, depth+1, byParent, postId);
-  }).join("");
-  var canReply = depth < 4;
-  return '<div class="comment">'+
-    '<div class="meta">'+avatar(c.author,18)+' <span class="who">'+esc(c.author)+'</span>'+
-    '<span class="sep">·</span>'+ago(c.created_at)+'</div>'+
-    '<div class="msgbody">'+esc(c.body)+'</div>'+
-    '<div class="cactions">'+
-      (canReply ? '<button class="link" data-reply="'+c.id+'">reply</button>' : "")+
-      (author === state.admin ? '<button class="link" data-delc="'+c.id+'" style="color:var(--red)">delete</button>' : "")+
-      '<button class="link" data-ct="'+c.id+'">→ todo</button>'+
-      '<button class="link" data-cn="'+c.id+'">→ note</button>'+
-      '<button class="link" data-cw="'+c.id+'">→ wiki</button>'+
-    '</div>'+
-    '<div id="rbox-'+c.id+'"></div>'+
-    (kids ? '<div class="replies">'+kids+'</div>' : "")+
-    '</div>';
-}
-function renderDetail(id){
-  var d = state.detail[id]; if (!d) return;
-  var box = $("det-"+id); if (!box) return;
-  var byParent = commentTree(d.comments);
-  var rest = byParent[null] || [];
-  var open = d.status === "open";
-  box.innerHTML =
-    '<div class="postbody">'+esc(d.body)+'</div>'+
-    rest.map(function(c){ return renderComment(c, 1, byParent, id); }).join("")+
-    (rest.length ? "" : '<p class="hint" style="margin:10px 0 0">no comments yet</p>')+
-    (open ?
-      '<div class="replybox" style="margin-top:12px">'+
-        '<textarea id="cbox-'+id+'" placeholder="add a comment…" style="min-height:44px"></textarea>'+
-        '<button class="primary" id="csend-'+id+'">comment</button></div>' :
-      '<div class="replybox" style="margin-top:12px">'+
-        '<input type="text" id="cout-'+id+'" placeholder="outcome — e.g. merged in #42" style="flex:1">'+
-        '<button id="cclose-'+id+'">close post</button></div>');
-  box.querySelectorAll("[data-reply]").forEach(function(b){
-    b.onclick = function(){ openReplyBox(parseInt(b.dataset.reply,10), id); };
-  });
-  box.querySelectorAll("[data-delc]").forEach(function(b){
-    b.onclick = function(){
-      if (!confirm("delete this comment (and its replies)?")) return;
-      api("api/comments/"+b.dataset.delc, {method:"DELETE", body:{author:author, actor:author}})
-        .then(function(){ toast("deleted","ok"); return loadBoard(); }).then(renderBoard)
-        .catch(function(e){ toast(e.message,"err"); });
-    };
-  });
-  box.querySelectorAll("[data-ct],[data-cn],[data-cw]").forEach(function(b){
-    b.onclick = function(){
-      var cid = parseInt(b.dataset.ct || b.dataset.cn || b.dataset.cw, 10);
-      var c = d.comments.find(function(x){ return x.id === cid; });
-      if (!c) return;
-      var quote = "> " + c.author + " on " + d.title + ":\n> " + c.body.split("\n").join("\n> ");
-      if (b.dataset.ct) openTodoDialog("Follow-up: " + d.title, quote);
-      if (b.dataset.cn) openNoteDialog("From post: " + d.title, quote);
-      if (b.dataset.cw) openPageDialog("From post: " + d.title, quote);
-    };
-  });
-  var cs = $("csend-"+id);
-  if (cs) cs.onclick = function(){
-    var t = $("cbox-"+id).value.trim(); if (!t) return;
-    api("api/posts/"+id+"/comments", {method:"POST", body:{author:author, body:t}})
-      .then(function(){ toast("comment added","ok"); return loadBoard(); }).then(renderBoard)
-      .catch(function(e){ toast(e.message,"err"); });
+const idname = i => esc(IDNAME[i] || ("#" + i));
+
+/* ================= Task detail ================= */
+async function view_task(parts) {
+  tab_highlight();
+  const tid = parseInt(parts[0], 10);
+  const main = $("#main");
+  main.innerHTML = '<p class="dim">loading…</p>';
+  let data, qs, links;
+  const load = async () => {
+    data = await api("GET", `/api/tasks/${tid}`);
+    [qs, links] = await Promise.all([
+      api("GET", `/api/questions?attach_type=task&attach_id=${tid}`),
+      api("GET", `/api/context?type=task&id=${tid}`),
+    ]);
   };
-  var cc = $("cclose-"+id);
-  if (cc) cc.onclick = function(){
-    var o = $("cout-"+id).value.trim(); if (!o) { toast("outcome first","err"); return; }
-    api("api/posts/"+id+"/close", {method:"POST", body:{outcome:o}})
-      .then(function(){ toast("post closed","ok"); return loadBoard(); }).then(renderBoard)
-      .catch(function(e){ toast(e.message,"err"); });
+  const render = () => {
+    const t = data.task;
+    const open_qs = qs.filter(q => q.status === "open");
+    const is_human = ME.kind === "human";
+    const buttons = (NEXT[t.state] || [])
+      .filter(n => is_human || !HUMAN_ONLY(n))
+      .map(n => `<button ${n === "trashed" ? 'class="bad ghost"' : ""}
+        data-tr="${n}">${n === "previous"
+          ? (t.state === "done" ? "not done" : "restore")
+          : n}</button>`).join(" ");
+    const todo_html = data.todos.map(td => `
+      <div class="row" style="justify-content:space-between">
+        <label class="row" style="gap:8px">
+          <input type="checkbox" class="check" data-tick="${td.id}"
+                 ${td.done ? "checked" : ""}>
+          <span class="${td.done ? "dim" : ""}">${esc(td.title)}</span></label>
+        <button class="ghost small" data-tddel="${td.id}">×</button>
+      </div>`).join("");
+    const proof_html = data.proofs.length
+      ? data.proofs.map(p => `<div class="small">
+            ${p.state ? `<span class="tag t-${p.state === "merged" || p.state === "closed" ? "done" : p.state === "open" ? "building" : "paused"}">${esc(p.state)}</span>` : ""}
+            <a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">
+              ${esc(p.kind)}: ${esc(p.url)}</a>
+            <span class="dim">${ago(p.added_at)}
+              ${p.provider === "other" ? "· unverified" : "· " + esc(p.provider)}</span>
+          </div>`).join("")
+      : `<span class="dim small">none${t.proof_waived ? " (waived by human)" : ""}</span>`;
+    const tr_html = data.transitions.map(tr => `
+      <div class="small dim">${ago(tr.created_at)} —
+        <span class="st-${esc(tr.to_state || "idea")}">${esc(tr.from_state || "new")}
+        → ${esc(tr.to_state)}</span> by ${idname(tr.actor_id)}
+        ${tr.note ? `<div class="md">${md(tr.note)}</div>` : ""}</div>`).join("");
+    const q_html = qs.map(q => `
+      <div class="comment ${q.status === "open" ? "qopen" : ""}">
+        <div class="small dim">#${q.id} ${q.status} · ${ago(q.created_at)} ·
+          ${idname(q.asked_by)} →
+          ${q.asked_to_group ? "group:" + esc(q.asked_to_group) : idname(q.asked_to_id)}</div>
+        <div class="md">${md(q.body)}</div>
+        ${q.status === "answered"
+          ? `<div class="small"><strong>${idname(q.answered_by)}:</strong> ${md(q.answer)}</div>`
+          : is_human && q.asked_to_id === ME.id
+            ? `<button data-qans="${q.id}">answer</button>` : ""}
+      </div>`).join("");
+    const link_html = (links || []).map(l => `
+      <span class="tag t-idea" data-goto="${esc(l.type)}:${l.id}">${esc(l.type)} #${l.id}
+        ${esc(l.title || "")}</span>`).join(" ");
+    main.innerHTML = `
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <div class="small dim"><a href="#/project/${t.project_id}">← project</a></div>
+          <h2 style="margin:2px 0">${esc(t.title)} ${state_chip(t.state)}</h2>
+          <div class="small dim">#${t.id} · v${t.version} · priority ${esc(t.priority)}
+            ${t.tags ? "· " + esc(t.tags) : ""} · by ${idname(t.created_by)}
+            ${t.assignee_id ? "· assigned to " + idname(t.assignee_id) : ""}
+            ${t.state_changed_by ? "· last by " + idname(t.state_changed_by) : ""}</div>
+        </div>
+        <div class="row">${buttons}</div>
+      </div>
+      <div class="md" style="margin:10px 0">${md(t.body)}</div>
+      ${open_qs.length ? `<div class="card frozen" style="margin:10px 0">
+        <strong>Frozen — ${open_qs.length} open question(s)</strong>${q_html}</div>`
+        : q_html ? `<div class="card" style="margin:10px 0"><strong>Questions</strong>${q_html}</div>` : ""}
+      <div class="grid" style="grid-template-columns:1fr 1fr;margin-top:12px">
+        <div class="card"><h3 style="margin-top:0">Todos</h3>
+          ${todo_html || '<p class="dim small">none</p>'}
+          <div class="row" style="margin-top:8px">
+            <input id="td-new" placeholder="add todo" style="flex:1">
+            <button id="td-add">add</button></div></div>
+        <div class="card"><h3 style="margin-top:0">Proof</h3>${proof_html}
+          <div class="row" style="margin-top:6px">
+            <input id="pf-url" placeholder="https://github.com/…/pull/N" style="flex:1">
+            <button id="pf-add">attach</button>
+            <button class="ghost" id="pf-check">check state</button>
+            ${is_human && !t.proof_waived ? `<button class="ghost" id="t-waive">waive</button>` : ""}
+          </div></div>
+      </div>
+      ${link_html ? `<div class="card" style="margin-top:12px"><strong>Context</strong>
+        <div class="row">${link_html}</div></div>` : ""}
+      <div class="card" style="margin-top:12px"><h3 style="margin-top:0">History</h3>
+        ${tr_html || '<p class="dim small">no transitions yet</p>'}</div>
+      <div class="row" style="margin-top:12px">
+        <button id="t-ask">ask question</button>
+        <button id="t-edit">edit task</button>
+        ${t.state === "done" || t.state === "trashed"
+          ? `<button class="bad ghost" data-tr="previous">${t.state === "done" ? "not done" : "restore"}</button>` : ""}
+      </div>`;
+    $$("[data-tr]").forEach(b => b.onclick = () => {
+      const to = b.dataset.tr;
+      if (to === "trashed" && !confirm("Trash this task?")) return;
+      const need_note = to === "done" || to === "previous";
+      const t_now = data.task;
+      modal_form(`Transition → ${to}`, [
+        { id: "note", label: HUMAN_NOTE(to), type: "textarea" },
+      ], "go", async v => {
+        await api("POST", `/api/tasks/${tid}/transition`,
+          { to, note: v.note, version: t_now.version });
+        toast("→ " + to); await load(); render();
+      });
+    });
+    $$("[data-tick]").forEach(cb => cb.onclick = async () => {
+      try {
+        const td = data.todos.find(x => x.id === parseInt(cb.dataset.tick, 10));
+        await api("POST", `/api/todos/${td.id}/${cb.checked ? "tick" : "untick"}`,
+          { version: td.version });
+        await load(); render();
+      } catch (e) { toast(e.message, true); await load(); render(); }
+    });
+    $$("[data-tddel]").forEach(b => b.onclick = async () => {
+      try { await api("DELETE", `/api/todos/${b.dataset.tddel}`); await load(); render(); }
+      catch (e) { toast(e.message, true); }
+    });
+    $$("[data-qans]").forEach(b => b.onclick = () =>
+      modal_form("Answer question", [
+        { id: "answer", label: "answer", type: "textarea" },
+      ], "answer", async v => {
+        await api("POST", `/api/questions/${b.dataset.qans}/answer`, v);
+        toast("answered"); await load(); render();
+      }));
+    $$("[data-goto]").forEach(el => el.onclick = () => {
+      const [ty, id] = el.dataset.goto.split(":");
+      location.hash = "#/" + (ty === "task" ? "task" : ty === "project"
+        ? "project" : ty === "discussion" ? "discussion" : "project") + "/" + id;
+    });
+    const add_todo = async () => {
+      const v = $("#td-new").value.trim();
+      if (!v) return;
+      try { await api("POST", `/api/tasks/${tid}/todos`, { title: v }); }
+      catch (e) { return toast(e.message, true); }
+      await load(); render();
+    };
+    $("#td-add").onclick = add_todo;
+    $("#t-ask").onclick = () => modal_form("Ask about this task", [
+      { id: "body", label: "question", type: "textarea" },
+      { id: "to", label: "to (identity id, blank = anyone)" },
+    ], "ask", async v => {
+      await api("POST", "/api/questions", {
+        project_id: t.project_id, body: v.body, attach_type: "task", attach_id: tid,
+        to_identity_id: v.to ? parseInt(v.to, 10) : undefined });
+      toast("asked"); await load(); render();
+    }, true);
+    $("#t-edit").onclick = () => modal_form("Edit task", [
+      { id: "title", label: "title", value: t.title },
+      { id: "body", label: "body", type: "textarea", value: t.body },
+      { id: "priority", label: "priority", type: "select",
+        options: ["low", "medium", "high", "urgent"].map(x => [x, x]),
+        value: t.priority },
+      { id: "tags", label: "tags", value: t.tags },
+    ], "save", async v => {
+      await api("PATCH", `/api/tasks/${tid}`, { ...v, version: t.version });
+      await load(); render();
+    }, true);
+    $("#pf-add").onclick = async () => {
+      const v = $("#pf-url").value.trim();
+      if (!v) return;
+      try {
+        await api("POST", `/api/tasks/${tid}/proofs`, { url: v });
+        toast("proof attached"); await load(); render();
+      } catch (e) { toast(e.message, true); }
+    };
+    $("#pf-check").onclick = async () => {
+      try {
+        const rs = await api("POST", `/api/tasks/${tid}/proofs/check`);
+        toast(rs.length ? "state: " + rs.map(x => x.state || "?").join(", ")
+          : "nothing checkable / inert");
+        await load(); render();
+      } catch (e) { toast(e.message, true); }
+    };
+    const waive = $("#t-waive");
+    if (waive) waive.onclick = async () => {
+      try {
+        await api("PATCH", `/api/tasks/${tid}`,
+          { proof_waived: true, version: t.version });
+        toast("proof waived"); await load(); render();
+      } catch (e) { toast(e.message, true); }
+    };
   };
+  try { await load(); await load_directory(); render(); }
+  catch (e) { main.innerHTML = `<p>${esc(e.message)}</p>`; }
+  return mark_refresh(async () => { await load(); render(); });
 }
-function openReplyBox(commentId, postId){
-  var holder = $("rbox-"+commentId);
-  holder.innerHTML = '<div class="replybox">'+
-    '<textarea id="rt-'+commentId+'" placeholder="reply…" style="min-height:44px"></textarea>'+
-    '<button class="primary" id="rs-'+commentId+'">reply</button></div>';
-  $("rt-"+commentId).focus();
-  $("rs-"+commentId).onclick = function(){
-    var t = $("rt-"+commentId).value.trim(); if (!t) return;
-    api("api/posts/"+postId+"/comments", {method:"POST",
-      body:{author:author, body:t, parent_id:commentId}})
-      .then(function(){ toast("reply added","ok"); return loadBoard(); }).then(renderBoard)
-      .catch(function(e){ toast(e.message,"err"); });
-  };
-}
-$("btn-post").onclick = function(){
-  $("p-title").value = ""; $("p-body").value = ""; $("p-audience").value = "";
-  $("p-author").value = author; $("p-kind").value = "info";
-  $("dlg-post").showModal();
-};
-$("p-post").onclick = function(){
-  var title = $("p-title").value.trim(), body = $("p-body").value.trim();
-  if (!title || !body) { toast("title and message, please","err"); return; }
-  author = $("p-author").value.trim() || "human"; saveAuthor();
-  api("api/posts"+qs(), {method:"POST", body:{
-    title:title, body:body, kind:$("p-kind").value,
-    audience:$("p-audience").value.trim()||"all", author:author}})
-  .then(function(){ $("dlg-post").close(); toast("posted","ok"); loadBoard().then(renderBoard); })
-  .catch(function(e){ toast(e.message,"err"); });
-};
+ROUTES.push({ name: "task", view: view_task });
 
-/* ---------- todos -------------------------------------------------------------- */
-function loadTodos(){
-  return Promise.all([
-    api("api/todos"+qs({status:"open"})).then(function(d){ state.todos = d; }),
-    api("api/todos"+qs({status:"done"})).then(function(d){ state.todosDone = d; }),
-  ]);
-}
-function prioBadge(p){ return '<span class="badge p-'+esc(p)+'">'+esc(p)+'</span>'; }
-function tagsChips(tags){
-  if (!tags) return "";
-  return tags.split(",").filter(Boolean).map(function(t){
-    return '<span class="tagchip">'+esc(t)+'</span>';
-  }).join("");
-}
-function todoRow(t, done){
-  return '<div class="todorow'+(done?" done":"")+'">'+
-    '<button class="tick" data-tick="'+t.id+'" title="'+(done?"reopen":"done")+'">✓</button>'+
-    '<div>'+
-      '<div class="tt"><b>'+esc(t.title)+'</b> '+prioBadge(t.priority)+'</div>'+
-      (t.body ? '<div class="hint" style="margin-top:2px;white-space:pre-wrap">'+esc(t.body)+'</div>' : "")+
-      '<div class="meta" style="margin-top:4px">'+avatar(t.created_by,16)+' '+esc(t.created_by)+
-        (t.assignee ? ' → <span class="who">@'+esc(t.assignee)+'</span>' : "")+
-        '<span class="sep">·</span>'+ago(t.created_at)+
-        (t.project_slug && t.project_slug!=="general" ? '<span class="sep">·</span>'+esc(t.project_slug) : "")+
-        tagsChips(t.tags)+'</div>'+
-    '</div>'+
-    '<div class="right">'+
-      '<button class="ghost small" data-edit="'+t.id+'">edit</button>'+
-      '<button class="ghost small" data-arch="'+t.id+'">archive</button>'+
-    '</div></div>';
-}
-function renderTodos(){
-  $("todo-hint").textContent = state.todos.length + " open";
-  $("todos").innerHTML = state.todos.length
-    ? state.todos.map(function(t){ return todoRow(t,false); }).join("")
-    : '<div class="empty"><b>No open todos</b>add one — or promote a comment from the board</div>';
-  $("todos-donebox").hidden = !state.todosDone.length;
-  $("todos-done").innerHTML = state.todosDone.map(function(t){ return todoRow(t,true); }).join("");
-  wireTodos($("todos")); wireTodos($("todos-done"));
-}
-function wireTodos(box){
-  box.querySelectorAll("[data-tick]").forEach(function(b){
-    b.onclick = function(){
-      var id = parseInt(b.dataset.tick,10);
-      var wasDone = state.todosDone.some(function(t){ return t.id === id; });
-      api("api/todos/"+id+(wasDone?"/reopen":"/done"), {method:"POST", body:{actor:author}})
-        .then(function(){ loadTodos().then(renderTodos); })
-        .catch(function(e){ toast(e.message,"err"); });
-    };
-  });
-  box.querySelectorAll("[data-arch]").forEach(function(b){
-    b.onclick = function(){
-      api("api/todos/"+b.dataset.arch+"/archive", {method:"POST"})
-        .then(function(){ toast("archived","ok"); loadTodos().then(renderTodos); })
-        .catch(function(e){ toast(e.message,"err"); });
-    };
-  });
-  box.querySelectorAll("[data-edit]").forEach(function(b){
-    b.onclick = function(){
-      var id = parseInt(b.dataset.edit,10);
-      var t = state.todos.concat(state.todosDone).find(function(x){ return x.id === id; });
-      if (t) openTodoDialog(null,null,t);
-    };
-  });
-}
-function openTodoDialog(title, body, existing){
-  $("t-head").textContent = existing ? "Edit todo" : "New todo";
-  $("t-id").value = existing ? existing.id : "";
-  $("t-title").value = existing ? existing.title : (title || "");
-  $("t-body").value = existing ? existing.body : (body || "");
-  $("t-priority").value = existing ? existing.priority : "medium";
-  $("t-assignee").value = existing ? (existing.assignee||"") : "";
-  $("t-tags").value = existing ? existing.tags : "";
-  if (existing) $("t-project").value = existing.project_id;
-  else if (state.project){
-    var p = state.projects.find(function(x){ return x.slug === state.project; });
-    if (p) $("t-project").value = p.id;
-  }
-  $("dlg-todo").showModal();
-}
-$("btn-todo").onclick = function(){ openTodoDialog(); };
-$("t-save").onclick = function(){
-  var id = $("t-id").value;
-  var payload = {
-    title:$("t-title").value.trim(), body:$("t-body").value.trim(),
-    priority:$("t-priority").value, tags:$("t-tags").value.trim(),
-    assignee:$("t-assignee").value.trim() || null,
-    project_id:parseInt($("t-project").value,10), actor:author,
-  };
-  if (!payload.title) { toast("title, please","err"); return; }
-  var req = id
-    ? api("api/todos/"+id, {method:"PATCH", body:payload})
-    : api("api/todos"+qs(), {method:"POST", body:Object.assign({author:author}, payload)});
-  req.then(function(){ $("dlg-todo").close(); toast("saved","ok"); loadTodos().then(renderTodos); })
-    .catch(function(e){ toast(e.message,"err"); });
-};
-
-/* ---------- notes ----------------------------------------------------------------- */
-function loadNotes(){
-  return api("api/notes"+qs()).then(function(d){ state.notes = d; });
-}
-function renderNotes(){
-  if (!state.notes.length){
-    $("notes").innerHTML = '<div class="empty" style="grid-column:1/-1"><b>No notes yet</b>scratch plans, checklists ("- [ ] item"), brain dumps — notes are yours, the wiki is forever</div>';
-    return;
-  }
-  $("notes").innerHTML = state.notes.map(function(n){
-    return '<div class="note" data-note="'+n.id+'">'+
-      '<b>'+esc(n.title)+'</b>'+
-      '<div class="prev">'+esc(n.body.slice(0,220))+'</div>'+
-      '<div class="meta" style="margin-top:7px">'+avatar(n.created_by,16)+' '+ago(n.updated_at)+
-        (n.tags? " "+tagsChips(n.tags):"")+'</div></div>';
-  }).join("");
-  $("notes").querySelectorAll("[data-note]").forEach(function(el){
-    el.onclick = function(){
-      var n = state.notes.find(function(x){ return x.id === parseInt(el.dataset.note,10); });
-      if (n) openNoteView(n);
-    };
-  });
-}
-function openNoteView(n){
-  $("nv-title").textContent = n.title;
-  $("nv-meta").innerHTML = avatar(n.created_by,16)+" "+esc(n.created_by)+
-    " · updated "+ago(n.updated_at)+(n.tags?" "+tagsChips(n.tags):"");
-  $("nv-body").innerHTML = md(n.body, {checklist:true});
-  $("nv-body").dataset.noteId = n.id;
-  $("dlg-note-view").showModal();
-}
-$("nv-body").addEventListener("change", function(ev){
-  var cb = ev.target;
-  if (!cb.matches("input[data-line]")) return;
-  var noteId = parseInt($("nv-body").dataset.noteId,10);
-  var n = state.notes.find(function(x){ return x.id === noteId; });
-  if (!n) return;
-  var lines = n.body.split("\n");
-  var li = parseInt(cb.dataset.line,10);
-  if (/^\s*[-*]\s+\[\s\]/.test(lines[li])) lines[li] = lines[li].replace("[ ]","[x]");
-  else lines[li] = lines[li].replace(/\[[xX]\]/,"[ ]");
-  api("api/notes/"+noteId, {method:"PUT",
-    body:{title:n.title, body:lines.join("\n"), tags:n.tags, author:author}})
-  .then(function(){ return loadNotes(); })
-  .then(function(){
-    var fresh = state.notes.find(function(x){ return x.id === noteId; });
-    if (fresh) openNoteView(fresh);
-  })
-  .catch(function(e){ toast(e.message,"err"); });
-});
-$("nv-edit").onclick = function(){
-  var noteId = parseInt($("nv-body").dataset.noteId,10);
-  var n = state.notes.find(function(x){ return x.id === noteId; });
-  $("dlg-note-view").close();
-  if (n) openNoteDialog(null,null,n);
-};
-function openNoteDialog(title, body, existing){
-  $("ne-head").textContent = existing ? "Edit note" : "New note";
-  $("n-id").value = existing ? existing.id : "";
-  $("n-title").value = existing ? existing.title : (title || "");
-  $("n-body").value = existing ? existing.body : (body || "");
-  $("n-tags").value = existing ? existing.tags : "";
-  if (existing) $("n-project").value = existing.project_id;
-  $("dlg-note-edit").showModal();
-}
-$("btn-note").onclick = function(){ openNoteDialog(); };
-$("n-save").onclick = function(){
-  var title = $("n-title").value.trim();
-  if (!title) { toast("title, please","err"); return; }
-  var id = $("n-id").value;
-  var req = id
-    ? api("api/notes/"+id, {method:"PUT", body:{
-        title:title, body:$("n-body").value, tags:$("n-tags").value.trim(), author:author}})
-    : api("api/notes"+qs(), {method:"POST", body:{
-        title:title, body:$("n-body").value, tags:$("n-tags").value.trim(), author:author,
-        project_id:parseInt($("n-project").value,10)}});
-  req.then(function(){ $("dlg-note-edit").close(); toast("note saved","ok"); loadNotes().then(renderNotes); })
-    .catch(function(e){ toast(e.message,"err"); });
-};
-
-/* ---------- wiki -------------------------------------------------------------------- */
-function renderWiki(){
-  if (!state.pages.length){
-    $("wiki-list").innerHTML = '<div class="empty"><b>No wiki pages</b>knowledge that should outlive the week — how-tos, conventions, runbooks</div>';
-    return;
-  }
-  $("wiki-list").innerHTML = state.pages.map(function(p){
-    return '<div class="wikiitem" data-page="'+esc(p.slug)+'">'+
-      '<div><b>'+esc(p.title)+'</b><div class="hint">'+esc((p.body||"").slice(0,140))+'</div></div>'+
-      '<div class="grow" style="flex:1"></div>'+
-      '<div class="meta">'+avatar(p.created_by,16)+' '+ago(p.updated_at)+
-      (p.project_slug && p.project_slug!=="general" ? ' · '+esc(p.project_slug) : "")+'</div></div>';
-  }).join("");
-  $("wiki-list").querySelectorAll("[data-page]").forEach(function(el){
-    el.onclick = function(){
-      api("api/wiki/"+el.dataset.page).then(function(p){
-        $("wv-title").textContent = p.title;
-        $("wv-meta").innerHTML = avatar(p.created_by,16)+" "+esc(p.created_by)+
-          " · updated "+ago(p.updated_at)+" · /"+esc(p.slug);
-        $("wv-body").innerHTML = md(p.body, {checklist:true});
-        $("wv-body").dataset.slug = p.slug;
-        $("dlg-page-view").showModal();
-      }).catch(function(e){ toast(e.message,"err"); });
-    };
-  });
-}
-$("wv-edit").onclick = function(){
-  var slug = $("wv-body").dataset.slug;
-  $("dlg-page-view").close();
-  var p = state.pages.find(function(x){ return x.slug === slug; });
-  if (p) openPageDialog(null,null,p);
-};
-function openPageDialog(title, body, existing){
-  $("we-head").textContent = existing ? "Edit wiki page" : "New wiki page";
-  $("w-id").value = existing ? existing.id : "";
-  $("w-title").value = existing ? existing.title : (title || "");
-  $("w-slug").value = existing ? existing.slug : "";
-  $("w-body").value = existing ? existing.body : (body || "");
-  $("w-project").disabled = !!existing;
-  $("w-slug").disabled = !!existing;
-  if (existing) $("w-project").value = existing.project_id;
-  $("dlg-page-edit").showModal();
-}
-$("btn-page").onclick = function(){ openPageDialog(); };
-$("w-save").onclick = function(){
-  var title = $("w-title").value.trim();
-  if (!title) { toast("title, please","err"); return; }
-  var id = $("w-id").value;
-  var base = "api/wiki"+(id ? "/"+$("w-slug").value.trim() : qs());
-  var payload = {title:title, body:$("w-body").value, author:author};
-  if (!id) payload.slug = $("w-slug").value.trim() || null;
-  api(base, {method:id?"PUT":"POST", body:payload})
-    .then(function(){ $("dlg-page-edit").close(); toast("page saved","ok");
-      return api("api/wiki"+qs()).then(function(d){ state.pages = d; renderWiki(); }); })
-    .catch(function(e){ toast(e.message,"err"); });
-};
-
-/* ---------- chat ---------------------------------------------------------------------- */
-function chatChannel(){
-  return state.project || "general";
-}
-function loadChat(){
-  var ch = chatChannel();
-  if (state.chatChannel !== ch){ state.chatChannel = ch; state.chat = []; state.chatSince = 0; }
-  return api("api/chat?channel="+encodeURIComponent(ch)).then(function(d){
-    state.chat = d; state.chatSince = d.length ? d[d.length-1].created_at : 0;
-  });
-}
-function renderChat(){
-  var chEl = $("chat-ch");
-  if (chEl) chEl.textContent = chatChannel();
-  var log = $("chat-log");
-  log.innerHTML = state.chat.map(function(m){
-    return '<div class="chatmsg">'+avatar(m.author,22)+
-      '<div class="cb"><div class="cline"><b>'+esc(m.author)+'</b>'+ago(m.created_at)+'</div>'+
-      '<div class="ct">'+esc(m.body)+'</div></div></div>';
-  }).join("") || '<p class="hint" style="text-align:center;margin:auto">quiet in here… say hi</p>';
-}
-function chatScroll(){ var el = $("chat-log"); if (el) el.scrollTop = el.scrollHeight; }
-function startChatPoll(){
-  if (state.chatTimer) clearInterval(state.chatTimer);
-  state.chatTimer = setInterval(function(){
-    api("api/chat?channel="+encodeURIComponent(chatChannel())+"&since="+state.chatSince).then(function(d){
-      if (d.length){ state.chat = state.chat.concat(d).slice(-300);
-        state.chatSince = d[d.length-1].created_at; renderChat(); chatScroll(); }
-    }).catch(function(){});
-  }, 8000);
-}
-function sendChat(){
-  var t = $("chat-text").value.trim(); if (!t) return;
-  author = $("chat-author").value.trim() || author; saveAuthor();
-  $("chat-author").value = author;
-  api("api/chat", {method:"POST", body:{author:author, body:t, channel:chatChannel()}})
-    .then(function(){ $("chat-text").value = ""; return loadChat(); })
-    .then(function(){ renderChat(); chatScroll(); })
-    .catch(function(e){ toast(e.message,"err"); });
-}
-$("chat-send").onclick = sendChat;
-$("chat-text").addEventListener("keydown", function(ev){ if (ev.key === "Enter") sendChat(); });
-$("chat-author").value = author;
-
-/* ---------- archive --------------------------------------------------------------------- */
-function loadArchive(){
-  return Promise.all([
-    api("api/todos"+qs({status:"archive"})).then(function(d){ state.archTodos = d; }),
-    api("api/posts"+qs({include_closed:"1"})).then(function(d){
-      state.archPosts = d.filter(function(p){ return p.status === "closed"; });
-    }),
-  ]);
-}
-function renderArchive(){
-  $("arch-todos").innerHTML = state.archTodos.length
-    ? state.archTodos.map(function(t){
-        return '<div class="todorow'+(t.done?" done":"")+'" style="opacity:.7">'+
-          '<span class="tick" style="cursor:default'+(t.done?";border-color:var(--green);color:var(--green)":"")+'">✓</span>'+
-          '<div><div class="tt">'+esc(t.title)+(t.done?"":" <span class='badge'>not finished</span>")+'</div>'+
-          '<div class="meta">'+esc(t.created_by)+(t.done?" · finished "+ago(t.done_at||t.created_at):" · archived unfinished")+
-          (t.project_slug && t.project_slug!=="general" ? " · "+esc(t.project_slug) : "")+'</div>'+
-          '<div class="right"><button class="ghost small" data-unarch="'+t.id+'">unarchive</button></div>'+
-          '</div></div>';
-      }).join("")
-    : '<p class="hint">no finished or archived todos</p>';
-  $("arch-todos").querySelectorAll("[data-unarch]").forEach(function(b){
-    b.onclick = function(){
-      api("api/todos/"+b.dataset.unarch+"/unarchive", {method:"POST", body:{actor:author}})
-        .then(function(){ toast("unarchived","ok"); loadArchive().then(renderArchive); loadTodos().then(renderTodos); })
-        .catch(function(e){ toast(e.message,"err"); });
-    };
-  });
-  $("arch-posts").innerHTML = state.archPosts.length
-    ? state.archPosts.map(function(p){
-        return '<div class="card closed"><div class="meta">'+avatar(p.created_by,20)+' <span class="who">'+esc(p.created_by)+
-          '</span><span class="sep">·</span>closed '+ago(p.closed_at||p.created_at)+'</div>'+
-          '<h3 class="t">'+esc(p.title)+'</h3>'+
-          '<div class="outcome"><b>outcome:</b> '+esc(p.outcome||"—")+'</div></div>';
-      }).join("")
-    : '<p class="hint">no closed posts</p>';
-}
-
-/* ---------- activity ---------------------------------------------------------------------- */
-var VERB_CLASS = {
-  posted: "v-blue", "commented on": "v-blue", "replied to": "v-blue",
-  "created project": "v-green", "created note": "v-green",
-  "created wiki page": "v-green", "added todo": "v-green",
-  registered: "v-green", "said hello": "v-dim",
-  closed: "v-amber", "finished todo": "v-amber", archived: "v-amber",
-  "archived todo": "v-amber", unarchived: "v-amber",
-  "unarchived todo": "v-amber",
-  deleted: "v-red",
-  updated: "v-blue", "updated todo": "v-blue", "updated note": "v-blue",
-  "updated wiki page": "v-blue", "updated profile of": "v-blue",
-  claimed: "v-purple", "released claim": "v-purple",
-};
-function renderActivity(){
-  var sel = $("actor-filter");
-  var actors = {};
-  state.events.forEach(function(e){ actors[e.actor] = true; });
-  var cur = sel.value;
-  sel.innerHTML = '<option value="">everyone</option>' +
-    Object.keys(actors).sort().map(function(a){
-      return '<option value="'+esc(a)+'"'+(cur===a?" selected":"")+'>'+esc(a)+'</option>';
-    }).join("");
-  sel.onchange = renderActivity;
-
-  var list = state.events.filter(function(e){ return !cur || e.actor === cur; });
-  if (!list.length){
-    $("events").innerHTML = '<div class="empty"><b>No activity yet</b>actions land here as clankers work</div>';
-    return;
-  }
-  var today = new Date(); today.setHours(0,0,0,0);
-  var yesterday = new Date(today.getTime() - 86400000);
-  function dayLabel(ts){
-    var d = new Date(ts * 1000); d.setHours(0,0,0,0);
-    if (d.getTime() === today.getTime()) return "Today";
-    if (d.getTime() === yesterday.getTime()) return "Yesterday";
-    return d.toLocaleDateString();
-  }
-  var out = [], lastDay = null;
-  list.forEach(function(e){
-    var dl = dayLabel(e.ts);
-    if (dl !== lastDay){
-      out.push('<div class="dayhead">'+esc(dl)+'</div>');
-      lastDay = dl;
+/* ================= Discussion ================= */
+async function view_discussion(parts) {
+  tab_highlight();
+  const q = parts[0].split("?");
+  const did = parseInt(q[0], 10);
+  const pid = new URLSearchParams((q[1] || "")).get("p");
+  const main = $("#main");
+  let comments, disc = null;
+  const load = async () => {
+    comments = await api("GET", `/api/discussions/${did}`);
+    if (pid) {
+      const ds = await api("GET", `/api/projects/${pid}/discussions`);
+      disc = ds.find(d => d.id === did) || null;
     }
-    var proj = null;
-    if (e.project_id){
-      var pj = state.projects.find(function(x){ return x.id === e.project_id; });
-      proj = pj ? pj.slug : null;
-    }
-    out.push(
-      '<div class="ev '+(VERB_CLASS[e.verb] || "v-dim")+'">'+
-        avatar(e.actor,18)+
-        '<div style="min-width:0">'+
-          '<span class="who">'+esc(e.actor)+'</span> '+esc(e.verb)+' '+
-          '<span class="badge">'+esc(e.obj_type)+'</span>'+
-          (e.obj_id ? ' <code>'+esc(e.obj_id)+'</code>' : "")+
-          (proj && proj!=="general" ? ' <span class="badge">'+esc(proj)+'</span>' : "")+
-          (e.summary ? '<div class="hint">'+esc(e.summary)+'</div>' : "")+
-        '</div>'+
-        '<span class="meta" style="margin-left:auto;flex:none">'+ago(e.ts)+'</span>'+
-      '</div>');
-  });
-  $("events").innerHTML = out.join("");
-}
-
-/* ---------- clankers ------------------------------------------------------------------------ */
-function renderClankers(){
-  $("join-endpoint").textContent = location.origin + baseUrl() + "mcp";
-  var claimsByAgent = {};
-  state.claims.forEach(function(c){
-    (claimsByAgent[c.agent] = claimsByAgent[c.agent] || []).push(c);
-  });
-  $("clankers").innerHTML = state.agents.length
-    ? state.agents.map(function(a){
-        var cl = claimsByAgent[a.name] || [];
-        return '<div class="card">'+
-          '<div style="display:flex;gap:10px;align-items:center">'+
-            avatar(a.name,34)+
-            '<div style="min-width:0"><b>'+esc(a.name)+'</b>'+
-            '<div class="meta"><span class="activedot '+(a.active?"on":"off")+'"></span>'+
-              (a.active ? "active" : "last seen "+ago(a.last_seen))+'</div></div>'+
-            '<button class="ghost small" style="margin-left:auto" data-pf="'+esc(a.name)+'">edit</button>'+
-          '</div>'+
-          (a.role ? '<div class="meta" style="margin-top:8px"><b style="color:var(--tx)">'+esc(a.role)+'</b></div>' : "")+
-          (a.note ? '<div class="hint" style="margin-top:5px;white-space:pre-wrap">'+esc(a.note)+'</div>' : "")+
-          (a.contact ? '<div class="hint" style="margin-top:4px">☎ '+esc(a.contact)+'</div>' : "")+
-          (a.session_id ? '<div class="hint" style="margin-top:4px">session <code>'+esc(String(a.session_id).slice(0,18))+'…</code></div>' : "")+
-          (cl.length ? '<div style="margin-top:8px"><b class="hint">claims:</b>'+cl.map(function(c){
-              return '<div class="hint"'+(c.stale?"":"")+'>'+esc(c.path)+
-                (c.stale?' <span class="badge">stale</span>':"")+
-                (c.note?" — "+esc(c.note):"")+'</div>'; }).join("")+'</div>' : "")+
-          '</div>';
-      }).join("")
-    : '<div class="empty" style="grid-column:1/-1"><b>Nobody has said hello</b>clankers announce themselves with slopclanker_hello at session start</div>';
-  $("clankers").querySelectorAll("[data-pf]").forEach(function(b){
-    b.onclick = function(){
-      var a = state.agents.find(function(x){ return x.name === b.dataset.pf; });
-      openProfileDialog(a);
+  };
+  const render = () => {
+    const html = comments.map(c => `
+      <div class="comment ${c.trashed_at ? "trashed" : ""}">
+        <div class="small dim">${idname(c.author_id)} · ${ago(c.created_at)}
+          ${c.trashed_at ? "· TRASHED" : ""}</div>
+        <div class="md">${md(c.body)}</div>
+        ${!c.trashed_at && ME.kind === "human"
+          ? `<button class="ghost small" data-ctrash="${c.id}">trash</button>` : ""}
+      </div>`).join("");
+    main.innerHTML = `
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0">${disc ? esc(disc.title) : "Discussion #" + did}
+          ${disc && disc.status === "closed" ? "🔒" : ""}</h2>
+        <span class="row">
+          ${pid ? `<a class="small" href="#/project/${pid}">← project</a>` : ""}
+          ${disc && disc.status === "open" && ME.kind === "human"
+            ? `<button class="ghost" id="d-close">close</button>` : ""}
+        </span></div>
+      ${disc ? `<div class="md dim">${md(disc.body)}</div>` : ""}
+      <div style="margin:12px 0">${html || '<p class="dim">no comments</p>'}</div>
+      <div class="row"><input id="c-new" placeholder="comment" style="flex:1">
+        <button class="pri" id="c-add">comment</button></div>`;
+    $$("[data-ctrash]").forEach(b => b.onclick = async () => {
+      try { await api("POST", `/api/comments/${b.dataset.ctrash}/trash`); load().then(render); }
+      catch (e) { toast(e.message, true); }
+    });
+    const close = $("#d-close");
+    if (close) close.onclick = async () => {
+      try { await api("POST", `/api/discussions/${did}/close`); load().then(render); }
+      catch (e) { toast(e.message, true); }
     };
+    $("#c-add").onclick = async () => {
+      const v = $("#c-new").value.trim();
+      if (!v) return;
+      try { await api("POST", `/api/discussions/${did}/comments`, { body: v }); }
+      catch (e) { return toast(e.message, true); }
+      $("#c-new").value = ""; load().then(render);
+    };
+  };
+  try { await load(); await load_directory(); render(); }
+  catch (e) { main.innerHTML = `<p>${esc(e.message)}</p>`; }
+  return mark_refresh(async () => { await load(); render(); });
+}
+ROUTES.push({ name: "discussion", view: view_discussion });
+
+/* ================= Note ================= */
+async function view_note(parts) {
+  tab_highlight();
+  const nid = parseInt(parts[0], 10);
+  const main = $("#main");
+  let data;
+  const load = async () => { data = await api("GET", `/api/notes/${nid}`); };
+  const render = () => {
+    const n = data.note;
+    main.innerHTML = `
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0">${esc(n.title)}</h2>
+        <button id="n-edit">edit</button></div>
+      <div class="small dim">project ${n.project_id} · updated ${ago(n.updated_at)}</div>
+      <div class="md card" style="margin:10px 0">${md(n.body)}</div>
+      ${data.revisions.length ? `<details><summary class="dim small">
+        ${data.revisions.length} revisions</summary>
+        ${data.revisions.map(r => `<div class="small dim" style="margin:4px 0">
+          ${ago(r.created_at)} — ${esc(r.title)}</div>`).join("")}</details>` : ""}`;
+    $("#n-edit").onclick = () => modal_form("Edit note", [
+      { id: "title", label: "title", value: n.title },
+      { id: "body", label: "body", type: "textarea", value: n.body },
+    ], "save", async v => {
+      await api("PATCH", `/api/notes/${nid}`, v); await load(); render();
+    }, true);
+  };
+  try { await load(); render(); } catch (e) { main.innerHTML = `<p>${esc(e.message)}</p>`; }
+  return mark_refresh(async () => { await load(); render(); });
+}
+ROUTES.push({ name: "note", view: view_note });
+
+
+/* ================= Identities (admin) ================= */
+async function view_identities() {
+  tab_highlight();
+  const main = $("#main");
+  main.innerHTML = '<p class="dim">loading…</p>';
+  let regs, ids;
+  const load = async () => {
+    [regs, ids] = await Promise.all([
+      api("GET", "/api/registrations"),
+      api("GET", "/api/identities"),
+    ]);
+  };
+  const render = () => {
+  const reg_html = regs.map(r => `
+    <div class="comment">
+      <div><strong>${esc(r.name)}</strong>
+        <span class="dim small">· asked ${ago(r.created_at)}</span></div>
+      <div class="small">note: ${esc(r.note || "—")}</div>
+      <div class="small dim">ip: ${esc(r.ip || "?")} · ua: ${esc((r.user_agent || "").slice(0, 70))}</div>
+      <div class="row" style="margin-top:6px">
+        <button class="pri" data-approvereg="${r.id}">approve</button>
+        <button class="bad ghost" data-rejectreg="${r.id}">reject</button>
+      </div>
+    </div>`).join("");
+  const id_html = ids.map(i => {
+    const creds = (i.credentials || []).map(c => `
+      <div class="small mono">${esc(c.kind)}${c.label ? "·" + esc(c.label) : ""}
+        · ${c.revoked_at ? "revoked" : "active"}
+        ${c.last_seen_at ? "· seen " + ago(c.last_seen_at) : "· never seen"}
+        ${c.last_ip ? "· " + esc(c.last_ip) : ""}
+        · ${c.call_count} calls</div>`).join("");
+    return `<tr>
+      <td>${esc(i.name)}<div class="small dim">${esc(i.kind)} · ${esc(i.role || "—")}
+        · ${esc(i.status)}</div></td>
+      <td>${creds || '<span class="dim small">none</span>'}</td>
+      <td class="small dim">${i.reg_ip ? esc(i.reg_ip) : ""}
+        ${i.reg_user_agent ? "<br>" + esc(i.reg_user_agent.slice(0, 60)) : ""}</td>
+      <td class="small dim">${ago(i.created_at)}</td>
+      <td class="row">
+        ${i.kind === "clanker" && i.status === "active"
+          ? `<button data-code="${i.id}">code</button>` : ""}
+        ${i.status === "active" && i.id !== ME.id
+          ? `<button class="bad ghost" data-revoke="${i.id}">revoke</button>` : ""}
+      </td></tr>`;
+  }).join("");
+  main.innerHTML = `
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">Identities</h2>
+      <button id="id-newuser">+ user</button></div>
+    <section class="card" style="margin:12px 0">
+      <h3 style="margin-top:0">Pending registrations (${regs.length})</h3>
+      ${reg_html || '<p class="dim">none</p>'}
+    </section>
+    <table><thead><tr><th>identity</th><th>credentials</th><th>origin</th>
+      <th>created</th><th></th></tr></thead><tbody>${id_html}</tbody></table>`;
+  $$("[data-approvereg]").forEach(b => b.onclick = async () => {
+    try {
+      const r = await api("POST", `/api/registrations/${b.dataset.approvereg}/approve`);
+      modal_form("Enrollment code — hand to the clanker", [
+        { id: "c", label: "code (expires " + (r.expires_at
+          ? new Date(r.expires_at * 1000).toLocaleString() : "?") + ")",
+          value: r.code },
+      ], "copy", async () => { });
+      await load();
+    } catch (e) { toast(e.message, true); }
   });
+  $$("[data-rejectreg]").forEach(b => b.onclick = async () => {
+    if (!confirm("Reject this registration?")) return;
+    try {
+      await api("POST", `/api/registrations/${b.dataset.rejectreg}/reject`);
+      load().then(render);
+    }
+    catch (e) { toast(e.message, true); }
+  });
+  $$("[data-code]").forEach(b => b.onclick = async () => {
+    try {
+      const r = await api("POST", `/api/identities/${b.dataset.code}/code`);
+      modal_form("New enrollment code", [{ id: "c", label: "code", value: r.code }],
+        "done", async () => { });
+    } catch (e) { toast(e.message, true); }
+  });
+  $$("[data-revoke]").forEach(b => b.onclick = async () => {
+    if (!confirm("Revoke this identity and all its credentials?")) return;
+    try {
+      await api("POST", `/api/identities/${b.dataset.revoke}/revoke`);
+      load().then(render);
+    }
+    catch (e) { toast(e.message, true); }
+  });
+  $("#id-newuser").onclick = () => modal_form("New user", [
+    { id: "username", label: "username" },
+    { id: "password", label: "password", type: "password" },
+    { id: "role", label: "role", type: "select",
+      options: (ME.role === "superadmin"
+        ? ["user", "admin", "superadmin"] : ["user", "admin"]).map(x => [x, x]) },
+  ], "create", async v => { await api("POST", "/api/users", v); toast("created"); load(); });
+  };
+  await load();
+  render();
+  await load_directory();
+  return mark_refresh(async () => { await load(); render(); });
 }
-function openProfileDialog(a){
-  $("pf-name").value = a ? a.name : "";
-  $("pf-name").readOnly = !!a;
-  $("pf-role").value = a ? (a.role||"") : "";
-  $("pf-note").value = a ? (a.note||"") : "";
-  $("pf-contact").value = a ? (a.contact||"") : "";
-  $("dlg-profile").showModal();
+ROUTES.push({ name: "identities", view: view_identities });
+
+/* ================= Trash ================= */
+async function view_trash() {
+  tab_highlight();
+  const main = $("#main");
+  let trashed, archived;
+  const load = async () => {
+    [trashed, archived] = await Promise.all([
+      api("GET", "/api/tasks?state=trashed"),
+      api("GET", "/api/projects?archived=1"),
+    ]);
+  };
+  const render = () => {
+    const t_html = trashed.map(t => `
+      <div class="row" style="justify-content:space-between">
+        <span><a href="#/task/${t.id}">${esc(t.title)}</a> ${state_chip("trashed")}
+          <span class="dim small">project ${t.project_id} · by ${idname(t.created_by)}</span></span>
+        ${ME.kind === "human"
+          ? `<button data-restore="${t.id}">restore</button>` : ""}
+      </div>`).join("");
+    const a_html = archived.filter(p => p.archived).map(p => `
+      <div class="row" style="justify-content:space-between">
+        <span>${esc(p.name)} <span class="dim small mono">${esc(p.slug)}</span></span>
+        <span class="row">
+          <button data-unarchive="${p.id}">unarchive</button>
+          ${ME.role === "admin" || ME.role === "superadmin"
+            ? `<button class="bad ghost" data-purge="${p.id}">purge…</button>` : ""}
+        </span></div>`).join("");
+    main.innerHTML = `
+      <h2 style="margin-top:0">Trash &amp; archive</h2>
+      <section class="card" style="margin-bottom:12px"><h3 style="margin-top:0">
+        Trashed tasks (${trashed.length})</h3>
+        ${t_html || '<p class="dim">none</p>'}</section>
+      <section class="card"><h3 style="margin-top:0">Archived projects</h3>
+        ${a_html || '<p class="dim">none</p>'}</section>`;
+    $$("[data-restore]").forEach(b => b.onclick = async () => {
+      try {
+        await api("POST", `/api/tasks/${b.dataset.restore}/transition`,
+          { to: "previous", note: "restored from trash" });
+        toast("restored"); load().then(render);
+      } catch (e) { toast(e.message, true); }
+    });
+    $$("[data-unarchive]").forEach(b => b.onclick = async () => {
+      try { await api("POST", `/api/projects/${b.dataset.unarchive}/unarchive`); }
+      catch (e) { return toast(e.message, true); }
+      load().then(render);
+    });
+    $$("[data-purge]").forEach(b => b.onclick = () => {
+      const pid = b.dataset.purge;
+      modal_form("Purge project (permanent, cascades)", [
+        { id: "sure", label: 'type "purge" to confirm' },
+      ], "purge", async v => {
+        if (v.sure !== "purge") throw new Error("not confirmed");
+        await api("POST", `/api/projects/${pid}/purge`);
+        toast("purged"); load().then(render);
+      });
+    });
+  };
+  try { await load(); await load_directory(); render(); }
+  catch (e) { main.innerHTML = `<p>${esc(e.message)}</p>`; }
+  return mark_refresh(async () => { await load(); render(); });
 }
-$("btn-profile").onclick = function(){ openProfileDialog(null); };
-$("pf-save").onclick = function(){
-  var name = $("pf-name").value.trim();
-  if (!name) { toast("name, please","err"); return; }
-  api("api/agents/"+encodeURIComponent(name), {method:"PUT", body:{
-    note:$("pf-note").value.trim() || null,
-    role:$("pf-role").value.trim() || null,
-    contact:$("pf-contact").value.trim() || null }})
-  .then(function(){ $("dlg-profile").close(); toast("identity saved","ok"); refresh(); })
-  .catch(function(e){ toast(e.message,"err"); });
-};
+ROUTES.push({ name: "trash", view: view_trash });
 
-/* ---------- render dispatch -------------------------------------------------------------------- */
-function render(){
-  var t = state.tab;
-  if (t === "board") renderBoard();
-  else if (t === "todos") renderTodos();
-  else if (t === "notes") renderNotes();
-  else if (t === "wiki") renderWiki();
-  else if (t === "chat") { renderChat(); startChatPoll(); }
-  else if (t === "archive") renderArchive();
-  else if (t === "activity") renderActivity();
-  else if (t === "clankers") renderClankers();
+/* ================= Activity (filtered event log) ================= */
+const ACT = { project: "", type: "", actor: "", timeframe: "7d", limit: 200 };
+async function view_activity() {
+  tab_highlight();
+  const main = $("#main");
+  const render = (events) => {
+    const evs = ACT.actor
+      ? events.filter(e => String(e.actor_id) === ACT.actor) : events;
+    const rows = evs.map(e => `<tr>
+      <td class="small dim">${new Date(e.ts * 1000).toLocaleString()}</td>
+      <td class="small">${idname(e.actor_id)}</td>
+      <td class="mono small">${esc(e.verb)}</td>
+      <td class="small">${esc(e.obj_type)} #${e.obj_id}
+        ${e.obj_type === "task" ? `<a class="small" href="#/task/${e.obj_id}">→</a>` : ""}
+        ${e.obj_type === "project" ? `<a class="small" href="#/project/${e.obj_id}">→</a>` : ""}</td>
+      <td class="small dim">${e.project_id || ""}</td>
+      <td class="small dim">${esc(e.to_identity_id ? "→ " + idname(e.to_identity_id) : "")}</td>
+    </tr>`).join("");
+    main.innerHTML = `
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0">Activity</h2>
+        <span class="dim small mono">${evs.length} shown · tamper-evident log</span></div>
+      <div class="card row" style="margin:10px 0">
+        <label class="small dim">project</label>
+        <select id="a-proj"><option value="">all</option></select>
+        <label class="small dim">type</label>
+        <select id="a-type">
+          <option value="">all</option>
+          ${["task", "todo", "project", "question", "decision", "discussion",
+             "comment", "note", "wiki", "proof", "identity"].map(x =>
+            `<option ${ACT.type === x ? "selected" : ""}>${x}</option>`).join("")}
+        </select>
+        <label class="small dim">actor</label>
+        <select id="a-actor"><option value="">all</option></select>
+        <label class="small dim">timeframe</label>
+        <select id="a-time">
+          ${[["1h", "last hour"], ["24h", "24 hours"], ["7d", "7 days"],
+             ["30d", "30 days"], ["all", "all time"]].map(([v, l]) =>
+            `<option value="${v}" ${ACT.timeframe === v ? "selected" : ""}>${l}</option>`).join("")}
+        </select>
+        <button id="a-go">apply</button>
+      </div>
+      <table><thead><tr><th>when</th><th>who</th><th>verb</th><th>object</th>
+        <th>proj</th><th>to</th></tr></thead><tbody>${rows}</tbody></table>`;
+    const proj_sel = $("#a-proj"), actor_sel = $("#a-actor");
+    api("GET", "/api/projects").then(ps => {
+      proj_sel.innerHTML = '<option value="">all</option>' + ps.map(p =>
+        `<option value="${p.id}" ${String(ACT.project) === String(p.id) ? "selected" : ""}>
+         ${esc(p.name)}</option>`).join("");
+    });
+    actor_sel.innerHTML = '<option value="">all</option>' +
+      Object.entries(IDNAME).map(([id, name]) =>
+        `<option value="${id}" ${ACT.actor === id ? "selected" : ""}>${esc(name)}</option>`).join("");
+    $("#a-go").onclick = () => {
+      ACT.project = proj_sel.value; ACT.type = $("#a-type").value;
+      ACT.actor = actor_sel.value; ACT.timeframe = $("#a-time").value;
+      refresh();
+    };
+  };
+  const refresh = async () => {
+    try {
+      // `since` on /api/events is an event-ID cursor, not a timestamp —
+      // timeframes filter client-side on ts after fetching the tail.
+      const hours = { "1h": 1, "24h": 24, "7d": 168, "30d": 720, "all": 0 };
+      const cutoff = hours[ACT.timeframe]
+        ? Date.now() / 1000 - hours[ACT.timeframe] * 3600 : 0;
+      let q = `/api/events?desc=1&limit=${ACT.limit}`;
+      if (ACT.project) q += `&project=${ACT.project}`;
+      if (ACT.type) q += `&type=${ACT.type}`;
+      let evs = await api("GET", q);
+      if (cutoff) evs = evs.filter(e => e.ts >= cutoff);
+      render(evs);
+    } catch (e) { main.innerHTML = `<p>${esc(e.message)}</p>`; }
+  };
+  await load_directory();
+  await refresh();
+  return mark_refresh(refresh);
 }
+ROUTES.push({ name: "activity", view: view_activity });
 
-/* ---------- dialog cancel/close buttons (no <form>, so wire them) --------- */
-document.querySelectorAll("dialog button[value=cancel], dialog button[value=close]")
-  .forEach(function(b){ b.onclick = function(){ b.closest("dialog").close(); }; });
+/* ================= boot ================= */
+if (TOKEN) boot(); else render_auth();
 
-/* ---------- boot -------------------------------------------------------------------------------- */
-renderChips();
-try { $("autorefresh").checked = localStorage.getItem("sc_auto") === "1"; } catch(e){}
-$("join-endpoint").textContent = location.origin + baseUrl() + "mcp";
-if (!token) showGate();
-else api("api/overview").then(function(){
-  hideGate(); setupAuto(); refresh();
-}).catch(function(){});
 </script>
 </body>
 </html>

@@ -1,139 +1,107 @@
-"""SlopClanker server: MCP tools + REST + web UI in one FastMCP app.
+"""SlopClanker v1.0 server: FastMCP app shell (phases 1-2).
 
-Agent coordination layer: projects, posts with nested comments, todos,
-notes, wiki, chat, presence and file claims. Humans get a full web UI;
-agent<->human talk stays in opencode sessions.
-
-Environment (set by run.sh):
-  SLOPCLANKER_HOST / SLOPCLANKER_PORT   bind address (default 0.0.0.0:8090)
-  SLOPCLANKER_DB                        sqlite path (default /data/slopclanker.db)
-  SLOPCLANKER_TOKEN                     bearer token; unset disables auth (dev only)
-  SLOPCLANKER_HEARTBEAT_TIMEOUT         agent active window in seconds (default 900)
+Surface: /healthz, setup wizard, the clanker registration pipeline,
+human login, and the admin identity surface. Object routes land with
+phase 3+. Entrypoint: ``python3 -m app.main`` (run.sh execs it); main()
+serves the middleware-wrapped asgi_app with uvicorn — do NOT use
+mcp.run(), it builds its own Starlette app and drops custom middleware.
 """
 
-import asyncio
 import hmac
 import json
+import logging
 import os
 import time
-from collections.abc import Awaitable, Callable
-from contextlib import contextmanager
-from functools import wraps
 from pathlib import Path
-from typing import Any
 
+import anyio
+import uvicorn
 from fastmcp import FastMCP
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
-
-from app import store
-from app.bus import bus
-from app.db import connect
-
-PUBLIC_PATHS = {"/", "/healthz", "/favicon.ico"}
-
-mcp = FastMCP(
-    "slopclanker",
-    instructions=(
-        "Townhall for agents. Say hello at session start to announce yourself "
-        "and get the awareness snapshot; post, comment and close posts to talk "
-        "and decide; keep todos, notes and wiki pages for knowledge; claim "
-        "files before editing them."
-    ),
+from starlette.responses import (
+    FileResponse,
+    JSONResponse,
+    Response,
+    StreamingResponse,
 )
 
+from app import (
+    auth,
+    bootstrap,
+    claims,
+    comms,
+    db,
+    decisions,
+    events,
+    knowledge,
+    links,
+    objects,
+    proofs,
+    questions,
+    ratelimit,
+    realtime,
+    registry,
+    search,
+    setup,
+    statemachine,
+    tools,
+)
+from app import (
+    export as export_mod,
+)
+from app import permissions as perms
+from app.middleware import BearerIdentity, IngressPath, scope_ip
+from app.schema import SCHEMA_VERSION
 
-def _db_path() -> str:
-    return os.environ.get("SLOPCLANKER_DB", "/data/slopclanker.db")
+logger = logging.getLogger(__name__)
+
+MAX_BODY_BYTES = 1_048_576
+STATIC_DIR = Path(__file__).parent / "static"
+
+mcp = FastMCP(name="slopclanker")
+tools.register(mcp)
 
 
-def _heartbeat_timeout() -> int:
-    return int(os.environ.get("SLOPCLANKER_HEARTBEAT_TIMEOUT", "900"))
-
-
-@contextmanager
 def _db():
-    conn = connect(_db_path())
+    return db.connect(bootstrap.ensure(db.db_path()))
+
+
+def _actor(request: Request) -> dict | None:
     try:
-        yield conn
-    finally:
-        conn.close()
+        return request.state.identity
+    except AttributeError:
+        return None
 
 
-class RequestTooLarge(Exception):
-    """Request body above the size cap."""
+def _reg_token_ok(request: Request) -> bool:
+    """Registration endpoints authenticate with the shared registration token."""
+    expected = os.environ.get("SLOPCLANKER_REG_TOKEN", "")
+    if not expected:
+        return False
+    raw = request.headers.get("authorization", "")
+    presented = raw[7:] if raw.lower().startswith("bearer ") else ""
+    return hmac.compare_digest(presented.encode(), expected.encode())
 
 
-class AdminRequired(Exception):
-    """Actor is not the configured admin."""
-
-
-def _admin_name() -> str:
-    return os.environ.get("SLOPCLANKER_ADMIN", "admin")
-
-
-def _require_admin(data: dict) -> None:
-    if str(data.get("actor", "")).strip() != _admin_name():
-        raise AdminRequired(f"admin ({_admin_name()}) only")
-
-
-MAX_BODY_BYTES = 1_000_000
-
-
-def _api(handler: Callable[[Request], Awaitable[JSONResponse]]) -> Callable[..., Any]:
-    """Map ValueError/TypeError to 400 and RequestTooLarge to 413."""
-
-    @wraps(handler)
-    async def wrapped(request: Request) -> JSONResponse:
-        try:
-            return await handler(request)
-        except RequestTooLarge as err:
-            return JSONResponse({"error": str(err)}, status_code=413)
-        except AdminRequired as err:
-            return JSONResponse({"error": str(err)}, status_code=403)
-        except (TypeError, ValueError) as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-
-    return wrapped
+class _BadBody(Exception):
+    pass
 
 
 async def _json_body(request: Request) -> dict:
-    if request.headers.get("content-length"):
-        try:
-            if int(request.headers["content-length"]) > MAX_BODY_BYTES:
-                raise RequestTooLarge(f"body over {MAX_BODY_BYTES} bytes")
-        except RequestTooLarge:
-            raise
-        except ValueError:
-            pass
+    length = request.headers.get("content-length")
+    if length and length.isdigit() and int(length) > MAX_BODY_BYTES:
+        raise _BadBody("body too large")
+    raw = await request.body()
+    if len(raw) > MAX_BODY_BYTES:
+        raise _BadBody("body too large")
     try:
-        data = await request.json()
-    except Exception as err:
-        raise ValueError("body must be JSON") from err
+        data = json.loads(raw or b"{}")
+    except ValueError:
+        raise _BadBody("invalid json")
     if not isinstance(data, dict):
-        raise TypeError("body must be a JSON object")
+        raise _BadBody("expected a json object")
     return data
-
-
-def _require(data: dict, *fields: str) -> None:
-    missing = [f for f in fields if not data.get(f)]
-    if missing:
-        raise ValueError(f"missing required field(s): {', '.join(missing)}")
-
-
-def _project_param(request: Request, data: dict | None = None) -> int | None:
-    """Resolve the project: ?project= query param wins, then body 'project'
-    (slug or id), then body 'project_id'. None if nothing given."""
-    ref = request.query_params.get("project") or (data or {}).get("project")
-    if not ref:
-        pid = (data or {}).get("project_id")
-        return int(pid) if pid else None
-    with _db() as conn:
-        found = store.get_project(conn, ref)
-    if found is None:
-        raise ValueError(f"project '{ref}' does not exist")
-    return int(found["id"])
 
 
 @mcp.custom_route("/healthz", methods=["GET"])
@@ -141,704 +109,1842 @@ async def healthz(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "service": "slopclanker"})
 
 
-_STATIC_DIR = Path(__file__).resolve().parent / "static"
-
-
 @mcp.custom_route("/", methods=["GET"])
 async def index(request: Request) -> FileResponse:
-    return FileResponse(_STATIC_DIR / "index.html", media_type="text/html")
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @mcp.custom_route("/favicon.ico", methods=["GET"])
-async def favicon(request: Request) -> FileResponse:
-    return FileResponse(_STATIC_DIR / "favicon.png", media_type="image/png")
+async def favicon(request: Request) -> Response:
+    return Response(status_code=204)
 
 
-@mcp.custom_route("/api/hello", methods=["POST"])
-@_api
-async def api_hello(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require(data, "name")
-    with _db() as conn:
-        snap = store.hello(
-            conn,
-            data["name"],
-            session_id=data.get("session_id"),
-            note=data.get("note"),
-            role=data.get("role"),
-            contact=data.get("contact"),
-            heartbeat_timeout=_heartbeat_timeout(),
-        )
-    return JSONResponse(snap)
-
-
-@mcp.custom_route("/api/overview", methods=["GET"])
-@_api
-async def api_overview(request: Request) -> JSONResponse:
+@mcp.custom_route("/api/setup", methods=["GET"])
+async def api_setup_status(request: Request) -> JSONResponse:
+    conn = _db()
     try:
-        seen = float(request.query_params.get("seen", "0"))
-    except ValueError:
-        seen = 0.0
-    with _db() as conn:
-        body = store.overview(
-            conn, heartbeat_timeout=_heartbeat_timeout(), seen_since=seen
+        return JSONResponse(
+            {
+                "service": "slopclanker",
+                "schema_version": SCHEMA_VERSION,
+                "setup_required": setup.setup_required(conn),
+            }
         )
-    body["admin_name"] = _admin_name()
-    return JSONResponse(body)
+    finally:
+        conn.close()
 
 
-# --- projects --------------------------------------------------------------
+@mcp.custom_route("/api/setup", methods=["POST"])
+async def api_setup_create(request: Request) -> JSONResponse:
+    ip = scope_ip(request.scope)
+    user_agent = request.headers.get("user-agent")
+    if not ratelimit.allow(f"setup:{ip}", limit=10):
+        return JSONResponse({"error": "too many attempts"}, status_code=429)
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    username = data.get("username")
+    password = data.get("password")
+    if not isinstance(username, str) or not isinstance(password, str):
+        return JSONResponse(
+            {"error": "username and password are required"}, status_code=422
+        )
+    conn = _db()
+    try:
+        try:
+            row = setup.create_superadmin(
+                conn, username, password, ip=ip, user_agent=user_agent
+            )
+        except setup.SetupComplete:
+            return JSONResponse({"error": "setup already done"}, status_code=409)
+        except setup.SetupError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+    finally:
+        conn.close()
+    return JSONResponse({"ok": True, "username": row["name"]}, status_code=201)
+
+
+@mcp.custom_route("/api/auth/register", methods=["POST"])
+async def api_register(request: Request) -> JSONResponse:
+    if not _reg_token_ok(request):
+        return JSONResponse({"error": "registration disabled"}, status_code=503)
+    ip = scope_ip(request.scope)
+    if not ratelimit.allow(f"register:{ip}", limit=5):
+        return JSONResponse({"error": "too many attempts"}, status_code=429)
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        try:
+            rid = registry.register_request(
+                conn,
+                data.get("name", ""),
+                data.get("note", ""),
+                data.get("claim_secret", ""),
+                ip,
+                request.headers.get("user-agent"),
+            )
+        except setup.InvalidName as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        except registry.NameTaken as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        except registry.RegistryError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+    finally:
+        conn.close()
+    return JSONResponse({"request_id": rid}, status_code=201)
+
+
+@mcp.custom_route("/api/auth/register/{rid:int}/poll", methods=["POST"])
+async def api_register_poll(request: Request) -> JSONResponse:
+    rid = request.path_params["rid"]
+    if not _reg_token_ok(request):
+        return JSONResponse({"error": "registration disabled"}, status_code=503)
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        try:
+            result = registry.poll(
+                conn, rid, data.get("claim_secret", ""), ip=scope_ip(request.scope)
+            )
+        except registry.NotFound:
+            return JSONResponse({"error": "no such registration"}, status_code=404)
+        except registry.WrongClaim:
+            return JSONResponse({"error": "claim secret mismatch"}, status_code=403)
+        except registry.RegistryError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+    finally:
+        conn.close()
+    return JSONResponse(result)
+
+
+@mcp.custom_route("/api/auth/enroll", methods=["POST"])
+async def api_enroll(request: Request) -> JSONResponse:
+    if not _reg_token_ok(request):
+        return JSONResponse({"error": "registration disabled"}, status_code=503)
+    ip = scope_ip(request.scope)
+    if not ratelimit.allow(f"enroll:{ip}", limit=10):
+        return JSONResponse({"error": "too many attempts"}, status_code=429)
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        try:
+            token = registry.enroll(conn, data.get("code", ""), ip=ip)
+        except registry.RegistryError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+    finally:
+        conn.close()
+    return JSONResponse({"token": token})
+
+
+@mcp.custom_route("/api/auth/reenroll", methods=["POST"])
+async def api_reenroll(request: Request) -> JSONResponse:
+    if not _reg_token_ok(request):
+        return JSONResponse({"error": "registration disabled"}, status_code=503)
+    ip = scope_ip(request.scope)
+    if not ratelimit.allow(f"reenroll:{ip}", limit=2):
+        return JSONResponse({"error": "too many attempts"}, status_code=429)
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        registry.reenroll_request(conn, data.get("name", ""), ip)
+    finally:
+        conn.close()
+    return JSONResponse({"ok": True}, status_code=202)
+
+
+@mcp.custom_route("/api/auth/login", methods=["POST"])
+async def api_login(request: Request) -> JSONResponse:
+    ip = scope_ip(request.scope)
+    if not ratelimit.allow(f"login:{ip}", limit=10):
+        return JSONResponse({"error": "too many attempts"}, status_code=429)
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        try:
+            row, token, expires = auth.login(
+                conn,
+                data.get("username", ""),
+                data.get("password", ""),
+                ip,
+                request.headers.get("user-agent"),
+            )
+        except auth.AuthError:
+            return JSONResponse({"error": "invalid credentials"}, status_code=401)
+    finally:
+        conn.close()
+    return JSONResponse(
+        {
+            "token": token,
+            "expires_at": expires,
+            "identity": {"id": row["id"], "name": row["name"], "role": row["role"]},
+        }
+    )
+
+
+@mcp.custom_route("/api/auth/whoami", methods=["GET"])
+async def api_whoami(request: Request) -> JSONResponse:
+    actor = _actor(request)
+    conn = _db()
+    try:
+        cred = conn.execute(
+            "SELECT id, kind, label, issued_at, expires_at, last_seen_at,"
+            " last_ip, call_count FROM credentials WHERE id = ?",
+            (actor["cred_id"],),
+        ).fetchone()
+    finally:
+        conn.close()
+    return JSONResponse(
+        {
+            "id": actor["id"],
+            "name": actor["name"],
+            "kind": actor["kind"],
+            "role": actor["role"],
+            "credential": dict(cred) if cred else None,
+        }
+    )
+
+
+@mcp.custom_route("/api/auth/logout", methods=["POST"])
+async def api_logout(request: Request) -> JSONResponse:
+    actor = _actor(request)
+    auth.revoke_credential(_db(), actor["cred_id"])
+    return Response(status_code=204)
+
+
+@mcp.custom_route("/api/admin/export", methods=["GET"])
+async def api_admin_export(request: Request) -> JSONResponse:
+    """Full JSON dump (admin-only): every table, chain hashes included."""
+    actor = _actor(request)
+    if actor is None or actor.get("role") not in ("admin", "superadmin"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    conn = _db()
+    try:
+        data = export_mod.export_all(conn)
+    finally:
+        conn.close()
+    return JSONResponse(data)
+
+
+@mcp.custom_route("/api/registrations", methods=["GET"])
+async def api_registrations(request: Request) -> JSONResponse:
+    actor = _actor(request)
+    if not perms.can(actor, perms.VIEW_IDENTITIES):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    status = request.query_params.get("status", "pending")
+    conn = _db()
+    try:
+        rows = conn.execute(
+            "SELECT r.*, d.name AS decided_by_name FROM registrations r"
+            " LEFT JOIN identities d ON d.id = r.decided_by"
+            " WHERE r.status = ? ORDER BY r.created_at DESC LIMIT 200",
+            (status,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            prior = conn.execute(
+                "SELECT COUNT(*) FROM identities WHERE reg_ip = ? AND id != ?",
+                (r["ip"], r["identity_id"] or -1),
+            ).fetchone()[0]
+            item = dict(r)
+            item["prior_from_ip"] = prior
+            out.append(item)
+    finally:
+        conn.close()
+    return JSONResponse(out)
+
+
+@mcp.custom_route("/api/registrations/{rid:int}/approve", methods=["POST"])
+async def api_registration_approve(request: Request) -> JSONResponse:
+    rid = request.path_params["rid"]
+    actor = _actor(request)
+    if not perms.can(actor, perms.APPROVE_REGISTRATION):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    conn = _db()
+    try:
+        try:
+            result = registry.approve(conn, rid, actor["id"])
+        except registry.NotFound:
+            return JSONResponse({"error": "no such registration"}, status_code=404)
+        except registry.RegistryError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+    finally:
+        conn.close()
+    return JSONResponse(result, status_code=201)
+
+
+@mcp.custom_route("/api/registrations/{rid:int}/reject", methods=["POST"])
+async def api_registration_reject(request: Request) -> JSONResponse:
+    rid = request.path_params["rid"]
+    actor = _actor(request)
+    if not perms.can(actor, perms.REJECT_REGISTRATION):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    conn = _db()
+    try:
+        try:
+            registry.reject(conn, rid, actor["id"])
+        except registry.NotFound:
+            return JSONResponse({"error": "no such registration"}, status_code=404)
+        except registry.RegistryError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+    finally:
+        conn.close()
+    return Response(status_code=204)
+
+
+@mcp.custom_route("/api/identities/directory", methods=["GET"])
+async def api_identities_directory(request: Request) -> JSONResponse:
+    """Name map for display; ids/names/kinds only — no contact or creds."""
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        rows = conn.execute(
+            "SELECT id, name, kind, status FROM identities"
+            " WHERE status = 'active' ORDER BY name LIMIT 1000"
+        ).fetchall()
+    finally:
+        conn.close()
+    return JSONResponse([dict(r) for r in rows])
+
+
+@mcp.custom_route("/api/identities", methods=["GET"])
+async def api_identities(request: Request) -> JSONResponse:
+    actor = _actor(request)
+    if not perms.can(actor, perms.VIEW_IDENTITIES):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    conn = _db()
+    try:
+        ids = conn.execute(
+            "SELECT * FROM identities ORDER BY created_at DESC LIMIT 500"
+        ).fetchall()
+        creds = conn.execute(
+            "SELECT identity_id, id, kind, label, issued_at, expires_at,"
+            " revoked_at, last_seen_at, last_ip, call_count"
+            " FROM credentials ORDER BY issued_at DESC"
+        ).fetchall()
+    finally:
+        conn.close()
+    by_identity: dict[int, list] = {}
+    for c in creds:
+        by_identity.setdefault(c["identity_id"], []).append(dict(c))
+    out = []
+    for i in ids:
+        item = dict(i)
+        item["credentials"] = by_identity.get(i["id"], [])
+        out.append(item)
+    return JSONResponse(out)
+
+
+@mcp.custom_route("/api/identities/{iid:int}/revoke", methods=["POST"])
+async def api_identity_revoke(request: Request) -> JSONResponse:
+    iid = request.path_params["iid"]
+    actor = _actor(request)
+    conn = _db()
+    try:
+        target = conn.execute(
+            "SELECT kind, role FROM identities WHERE id = ?", (iid,)
+        ).fetchone()
+        if target is None:
+            return JSONResponse({"error": "no such identity"}, status_code=404)
+        if iid == actor["id"]:
+            return JSONResponse({"error": "cannot revoke yourself"}, status_code=422)
+        if not perms.can(
+            actor,
+            perms.REVOKE_IDENTITY,
+            {"target_kind": target["kind"], "target_role": target["role"]},
+        ):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        auth.revoke_identity(conn, iid)
+    finally:
+        conn.close()
+    return Response(status_code=204)
+
+
+@mcp.custom_route("/api/identities/{iid:int}/code", methods=["POST"])
+async def api_identity_code(request: Request) -> JSONResponse:
+    iid = request.path_params["iid"]
+    actor = _actor(request)
+    if not perms.can(actor, perms.ISSUE_CODE):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    conn = _db()
+    try:
+        target = conn.execute(
+            "SELECT kind, status FROM identities WHERE id = ?", (iid,)
+        ).fetchone()
+        if (
+            target is None
+            or target["kind"] != "clanker"
+            or target["status"] != "active"
+        ):
+            return JSONResponse(
+                {"error": "no active clanker identity"}, status_code=404
+            )
+        code, expires = registry.issue_code(conn, iid, actor["id"])
+    finally:
+        conn.close()
+    return JSONResponse({"code": code, "expires_at": expires}, status_code=201)
+
+
+@mcp.custom_route("/api/users", methods=["POST"])
+async def api_users_create(request: Request) -> JSONResponse:
+    actor = _actor(request)
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    role = data.get("role", "user")
+    if not perms.can(actor, perms.CREATE_USER, {"role": role}):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    conn = _db()
+    try:
+        try:
+            row = auth.create_human(
+                conn,
+                data.get("username", ""),
+                data.get("password", ""),
+                role,
+                actor["id"],
+            )
+        except setup.SetupError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        except Exception as exc:
+            if "UNIQUE" in str(exc):
+                return JSONResponse({"error": "name already in use"}, status_code=409)
+            raise
+    finally:
+        conn.close()
+    return JSONResponse(
+        {"id": row["id"], "name": row["name"], "role": row["role"]}, status_code=201
+    )
+
+
+@mcp.custom_route("/api/notifications", methods=["GET"])
+async def api_notifications(request: Request) -> JSONResponse:
+    actor = _actor(request)
+    conn = _db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM notifications WHERE (identity_id IS NULL OR identity_id = ?)"
+            " AND read_at IS NULL ORDER BY created_at DESC LIMIT 100",
+            (actor["id"],),
+        ).fetchall()
+    finally:
+        conn.close()
+    return JSONResponse([dict(r) for r in rows])
+
+
+@mcp.custom_route("/api/notifications/{nid:int}/read", methods=["POST"])
+async def api_notification_read(request: Request) -> JSONResponse:
+    nid = request.path_params["nid"]
+    actor = _actor(request)
+    conn = _db()
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE notifications SET read_at = ? WHERE id = ?"
+                " AND (identity_id IS NULL OR identity_id = ?)",
+                (time.time(), nid, actor["id"]),
+            )
+    finally:
+        conn.close()
+    return Response(status_code=204)
+
+
+def _require_actor(request: Request) -> tuple[dict | None, JSONResponse | None]:
+    actor = _actor(request)
+    if actor is None:
+        return None, JSONResponse({"error": "authentication required"}, status_code=401)
+    return actor, None
+
+
+def _svc_error(exc: Exception) -> JSONResponse:
+    if isinstance(exc, (statemachine.BlockedByQuestions, objects.Frozen)):
+        return JSONResponse(
+            {"error": str(exc), "questions": exc.questions}, status_code=409
+        )
+    if isinstance(exc, (statemachine.VersionConflict,)):
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    if isinstance(exc, statemachine.HumanRequired):
+        return JSONResponse({"error": str(exc)}, status_code=403)
+    if isinstance(exc, proofs.ProofError):
+        if "human-only" in str(exc):
+            return JSONResponse({"error": str(exc)}, status_code=403)
+        if str(exc).startswith("no such"):
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    if isinstance(exc, (objects.ObjectError, statemachine.TransitionError)):
+        if str(exc).startswith("no such"):
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    if isinstance(exc, LookupError):
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    raise exc
+
+
+@mcp.custom_route("/api/stacks", methods=["GET"])
+async def api_stacks_list(request: Request) -> JSONResponse:
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        rows = objects.list_stacks(conn)
+    finally:
+        conn.close()
+    return JSONResponse([dict(r) for r in rows])
+
+
+@mcp.custom_route("/api/stacks", methods=["POST"])
+async def api_stacks_create(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        sid = objects.create_stack(
+            conn,
+            actor,
+            data.get("name", ""),
+            description=data.get("description", ""),
+            slug=data.get("slug"),
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"id": sid}, status_code=201)
 
 
 @mcp.custom_route("/api/projects", methods=["GET"])
-@_api
-async def api_list_projects(request: Request) -> JSONResponse:
-    with _db() as conn:
-        return JSONResponse(store.overview(conn, _heartbeat_timeout())["projects"])
+async def api_projects_list(request: Request) -> JSONResponse:
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        stack = request.query_params.get("stack")
+        rows = objects.list_projects(
+            conn,
+            stack_id=int(stack) if stack and stack.isdigit() else None,
+            include_archived=request.query_params.get("archived") == "1",
+        )
+    finally:
+        conn.close()
+    return JSONResponse([dict(r) for r in rows])
 
 
 @mcp.custom_route("/api/projects", methods=["POST"])
-@_api
-async def api_create_project(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require(data, "name", "author")
-    with _db() as conn:
-        project = store.create_project(
+async def api_projects_create(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        pid = objects.create_project(
             conn,
-            data["name"],
-            created_by=data["author"],
-            slug=data.get("slug"),
+            actor,
+            data.get("name", ""),
             description=data.get("description", ""),
+            stack_id=data.get("stack_id"),
+            slug=data.get("slug"),
         )
-    return JSONResponse(project)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"id": pid}, status_code=201)
 
 
-# --- posts + comments ------------------------------------------------------
+@mcp.custom_route("/api/projects/{pid:int}", methods=["GET"])
+async def api_project_get(request: Request) -> JSONResponse:
+    pid = request.path_params["pid"]
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        proj = objects.get_project(conn, pid)
+        tasks = objects.list_tasks(conn, project_id=pid)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"project": dict(proj), "tasks": [dict(t) for t in tasks]})
 
 
-@mcp.custom_route("/api/posts", methods=["POST"])
-@_api
-async def api_create_post(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require(data, "title", "body", "author")
-    with _db() as conn:
-        pid = store.create_post(
+@mcp.custom_route("/api/projects/{pid:int}", methods=["PATCH"])
+async def api_project_edit(request: Request) -> JSONResponse:
+    pid = request.path_params["pid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        proj = objects.edit_project(
             conn,
-            data["title"],
-            data["body"],
-            created_by=data["author"],
-            kind=data.get("kind", "info"),
-            audience=data.get("audience", "all"),
-            project_id=_project_param(request, data) or 1,
+            actor,
+            pid,
+            name=data.get("name"),
+            description=data.get("description"),
+            stack_id=data.get("stack_id"),
         )
-    return JSONResponse({"id": pid})
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(dict(proj))
 
 
-@mcp.custom_route("/api/posts", methods=["GET"])
-@_api
-async def api_list_posts(request: Request) -> JSONResponse:
-    include_closed = request.query_params.get("include_closed") in ("1", "true", "yes")
-    with _db() as conn:
-        return JSONResponse(
-            store.list_posts(
-                conn, project_id=_project_param(request), include_closed=include_closed
+async def _project_action(request: Request, fn) -> JSONResponse:
+    pid = request.path_params["pid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        result = fn(conn, actor, pid)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    if result is None:
+        return Response(status_code=204)
+    return JSONResponse(dict(result))
+
+
+@mcp.custom_route("/api/projects/{pid:int}/archive", methods=["POST"])
+async def api_project_archive(request: Request) -> JSONResponse:
+    return await _project_action(
+        request, lambda c, a, p: objects.set_project_archived(c, a, p, True)
+    )
+
+
+@mcp.custom_route("/api/projects/{pid:int}/unarchive", methods=["POST"])
+async def api_project_unarchive(request: Request) -> JSONResponse:
+    return await _project_action(
+        request, lambda c, a, p: objects.set_project_archived(c, a, p, False)
+    )
+
+
+@mcp.custom_route("/api/projects/{pid:int}/adopt", methods=["POST"])
+async def api_project_adopt(request: Request) -> JSONResponse:
+    return await _project_action(request, objects.adopt_project)
+
+
+@mcp.custom_route("/api/projects/{pid:int}/purge", methods=["POST"])
+async def api_project_purge(request: Request) -> JSONResponse:
+    return await _project_action(request, objects.purge_project)
+
+
+@mcp.custom_route("/api/tasks", methods=["GET"])
+async def api_tasks_list(request: Request) -> JSONResponse:
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    qp = request.query_params
+    conn = _db()
+    try:
+
+        def _qint(name):
+            v = qp.get(name)
+            return int(v) if v and v.isdigit() else None
+
+        rows = objects.list_tasks(
+            conn,
+            project_id=_qint("project"),
+            state=qp.get("state"),
+            assignee_id=_qint("assignee"),
+        )
+    finally:
+        conn.close()
+    return JSONResponse([dict(r) for r in rows])
+
+
+@mcp.custom_route("/api/tasks", methods=["POST"])
+async def api_tasks_create(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        tid = objects.create_task(
+            conn,
+            actor,
+            data.get("project_id", 0),
+            data.get("title", ""),
+            body=data.get("body", ""),
+            priority=data.get("priority", "medium"),
+            assignee_id=data.get("assignee_id"),
+            tags=data.get("tags", ""),
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"id": tid}, status_code=201)
+
+
+@mcp.custom_route("/api/tasks/{tid:int}", methods=["GET"])
+async def api_task_get(request: Request) -> JSONResponse:
+    tid = request.path_params["tid"]
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        task = dict(objects.get_task(conn, tid))
+        todos = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM todos WHERE task_id = ? AND trashed_at IS NULL"
+                " ORDER BY sort, id",
+                (tid,),
             )
-        )
+        ]
+        transitions = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM transitions WHERE task_id = ? ORDER BY id", (tid,)
+            )
+        ]
+        proofs = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM proofs WHERE task_id = ? AND trashed_at IS NULL"
+                " ORDER BY id",
+                (tid,),
+            )
+        ]
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(
+        {"task": task, "todos": todos, "transitions": transitions, "proofs": proofs}
+    )
 
 
-@mcp.custom_route("/api/posts/{post_id:int}", methods=["GET"])
-@_api
-async def api_post_detail(request: Request) -> JSONResponse:
-    with _db() as conn:
-        detail = store.post_detail(conn, request.path_params["post_id"])
-    if detail is None:
-        return JSONResponse({"error": "post not found"}, status_code=404)
-    return JSONResponse(detail)
-
-
-@mcp.custom_route("/api/posts/{post_id:int}/comments", methods=["POST"])
-@_api
-async def api_add_comment(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require(data, "author", "body")
-    with _db() as conn:
-        cid = store.add_comment(
+@mcp.custom_route("/api/tasks/{tid:int}", methods=["PATCH"])
+async def api_task_edit(request: Request) -> JSONResponse:
+    tid = request.path_params["tid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        assignee = data.get("assignee_id", objects.UNSET)
+        task = objects.edit_task(
             conn,
-            request.path_params["post_id"],
-            data["author"],
-            data["body"],
-            parent_id=data.get("parent_id"),
+            actor,
+            tid,
+            body=data.get("body"),
+            title=data.get("title"),
+            priority=data.get("priority"),
+            tags=data.get("tags"),
+            assignee_id=assignee,
+            proof_waived=data.get("proof_waived"),
+            version=data.get("version"),
         )
-    return JSONResponse({"id": cid})
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(dict(task))
 
 
-@mcp.custom_route("/api/posts/{post_id:int}/close", methods=["POST"])
-@_api
-async def api_close_post(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require(data, "outcome")
-    with _db() as conn:
-        store.close_post(conn, request.path_params["post_id"], data["outcome"])
-    return JSONResponse({"ok": True})
+@mcp.custom_route("/api/tasks/{tid:int}/transition", methods=["POST"])
+async def api_task_transition(request: Request) -> JSONResponse:
+    tid = request.path_params["tid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        task = statemachine.transition(
+            conn,
+            tid,
+            data.get("to", ""),
+            actor,
+            note=data.get("note", ""),
+            version=data.get("version"),
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(dict(task))
 
 
-# --- realtime -----------------------------------------------------------------
+@mcp.custom_route("/api/tasks/{tid:int}/todos", methods=["POST"])
+async def api_todo_add(request: Request) -> JSONResponse:
+    tid = request.path_params["tid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        td = objects.add_todo(conn, actor, tid, data.get("title", ""))
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"id": td}, status_code=201)
 
 
-STREAM_TYPES = {"event", "chat"}
-STREAM_HEARTBEAT = 15.0
+async def _todo_action(request: Request, fn) -> JSONResponse:
+    todo_id = request.path_params["toid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody:
+        data = {}
+    conn = _db()
+    try:
+        result = fn(conn, actor, todo_id, data)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    if result is None:
+        return Response(status_code=204)
+    return JSONResponse(dict(result))
+
+
+@mcp.custom_route("/api/todos/{toid:int}/tick", methods=["POST"])
+async def api_todo_tick(request: Request) -> JSONResponse:
+    return await _todo_action(
+        request,
+        lambda c, a, t, d: objects.tick_todo(c, a, t, True, version=d.get("version")),
+    )
+
+
+@mcp.custom_route("/api/todos/{toid:int}/untick", methods=["POST"])
+async def api_todo_untick(request: Request) -> JSONResponse:
+    return await _todo_action(
+        request,
+        lambda c, a, t, d: objects.tick_todo(c, a, t, False, version=d.get("version")),
+    )
+
+
+@mcp.custom_route("/api/todos/{toid:int}", methods=["DELETE"])
+async def api_todo_trash(request: Request) -> JSONResponse:
+    return await _todo_action(request, lambda c, a, t, d: objects.trash_todo(c, a, t))
+
+
+@mcp.custom_route("/api/tasks/{tid:int}/proofs", methods=["GET"])
+async def api_proofs_list(request: Request) -> JSONResponse:
+    tid = request.path_params["tid"]
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        rows = proofs.list_proofs(conn, tid)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(rows)
+
+
+@mcp.custom_route("/api/tasks/{tid:int}/proofs", methods=["POST"])
+async def api_proof_add(request: Request) -> JSONResponse:
+    tid = request.path_params["tid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        row = proofs.add_proof(
+            conn,
+            actor,
+            tid,
+            data.get("url", ""),
+            provider=data.get("provider"),
+            repo=data.get("repo"),
+            number=data.get("number"),
+            kind=data.get("kind"),
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(row, status_code=201)
+
+
+@mcp.custom_route("/api/proofs/{pid:int}/trash", methods=["POST"])
+async def api_proof_trash(request: Request) -> JSONResponse:
+    pid = request.path_params["pid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        row = proofs.trash_proof(conn, actor, pid)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(row)
+
+
+@mcp.custom_route("/api/tasks/{tid:int}/proofs/check", methods=["POST"])
+async def api_proofs_check(request: Request) -> JSONResponse:
+    tid = request.path_params["tid"]
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+
+    def _run():
+        conn = _db()  # fresh connection: sqlite objects stay in one thread
+        try:
+            return proofs.check_task(conn, tid)
+        finally:
+            conn.close()
+
+    try:
+        rows = await anyio.to_thread.run_sync(_run)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    return JSONResponse(rows)
+
+
+def _com_error(exc: Exception) -> JSONResponse:
+    from app import comms as _c
+
+    if isinstance(
+        exc,
+        (
+            _c.CommsError,
+            questions.QuestionError,
+            decisions.DecisionError,
+            links.LinkError,
+        ),
+    ):
+        if isinstance(exc, questions.RateLimited):
+            return JSONResponse({"error": str(exc)}, status_code=429)
+        msg = str(exc)
+        code = 404 if msg.startswith("no such") else 422
+        if (
+            "human-only" in msg
+            or "admins only" in msg
+            or "asker or admin" in msg
+            or "only the addressee" in msg
+        ):
+            code = 403
+        return JSONResponse({"error": msg}, status_code=code)
+    return _svc_error(exc)
+
+
+@mcp.custom_route("/api/projects/{pid:int}/discussions", methods=["GET"])
+async def api_discussions_list(request: Request) -> JSONResponse:
+    pid = request.path_params["pid"]
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        rows = comms.list_discussions(conn, pid)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse([dict(r) for r in rows])
+
+
+@mcp.custom_route("/api/projects/{pid:int}/discussions", methods=["POST"])
+async def api_discussions_create(request: Request) -> JSONResponse:
+    pid = request.path_params["pid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        did = comms.create_discussion(
+            conn,
+            actor,
+            pid,
+            data.get("title", ""),
+            kind=data.get("kind", "info"),
+            body=data.get("body", ""),
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"id": did}, status_code=201)
+
+
+@mcp.custom_route("/api/discussions/{did:int}", methods=["GET"])
+async def api_discussion_get(request: Request) -> JSONResponse:
+    did = request.path_params["did"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        rows = comms.list_comments(conn, did, actor)
+        return JSONResponse([dict(r) for r in rows])
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+
+
+@mcp.custom_route("/api/discussions/{did:int}/close", methods=["POST"])
+async def api_discussion_close(request: Request) -> JSONResponse:
+    did = request.path_params["did"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody:
+        data = {}
+    conn = _db()
+    try:
+        row = comms.close_discussion(conn, actor, did, outcome=data.get("outcome", ""))
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(dict(row))
+
+
+@mcp.custom_route("/api/discussions/{did:int}/reopen", methods=["POST"])
+async def api_discussion_reopen(request: Request) -> JSONResponse:
+    did = request.path_params["did"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        row = comms.reopen_discussion(conn, actor, did)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(dict(row))
+
+
+@mcp.custom_route("/api/discussions/{did:int}/comments", methods=["POST"])
+async def api_comment_add(request: Request) -> JSONResponse:
+    did = request.path_params["did"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        cid = comms.add_comment(
+            conn, actor, did, data.get("body", ""), parent_id=data.get("parent_id")
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"id": cid}, status_code=201)
+
+
+@mcp.custom_route("/api/comments/{cid:int}/trash", methods=["POST"])
+async def api_comment_trash(request: Request) -> JSONResponse:
+    cid = request.path_params["cid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        comms.trash_comment(conn, actor, cid)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return Response(status_code=204)
+
+
+@mcp.custom_route("/api/comments/{cid:int}/restore", methods=["POST"])
+async def api_comment_restore(request: Request) -> JSONResponse:
+    cid = request.path_params["cid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        comms.restore_comment(conn, actor, cid)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return Response(status_code=204)
+
+
+@mcp.custom_route("/api/comments/{cid:int}", methods=["DELETE"])
+async def api_comment_purge(request: Request) -> JSONResponse:
+    cid = request.path_params["cid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        comms.purge_comment(conn, actor, cid)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return Response(status_code=204)
+
+
+@mcp.custom_route("/api/projects/{pid:int}/chat", methods=["GET"])
+async def api_chat_list(request: Request) -> JSONResponse:
+    pid = request.path_params["pid"]
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    since = request.query_params.get("since", "0")
+    conn = _db()
+    try:
+        rows = comms.list_chat(conn, pid, since_id=int(since) if since.isdigit() else 0)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse([dict(r) for r in rows])
+
+
+@mcp.custom_route("/api/projects/{pid:int}/chat", methods=["POST"])
+async def api_chat_post(request: Request) -> JSONResponse:
+    pid = request.path_params["pid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        mid = comms.post_chat(conn, actor, pid, data.get("body", ""))
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"id": mid}, status_code=201)
+
+
+@mcp.custom_route("/api/projects/{pid:int}/decisions", methods=["GET"])
+async def api_decisions_list(request: Request) -> JSONResponse:
+    pid = request.path_params["pid"]
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        rows = decisions.list_decisions(conn, pid)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse([dict(r) for r in rows])
+
+
+@mcp.custom_route("/api/projects/{pid:int}/decisions", methods=["POST"])
+async def api_decisions_create(request: Request) -> JSONResponse:
+    pid = request.path_params["pid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        did = decisions.create(
+            conn, actor, pid, data.get("title", ""), context=data.get("context", "")
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"id": did}, status_code=201)
+
+
+@mcp.custom_route("/api/decisions/{did:int}/status", methods=["POST"])
+async def api_decision_status(request: Request) -> JSONResponse:
+    did = request.path_params["did"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        row = decisions.set_status(
+            conn,
+            actor,
+            did,
+            data.get("status", ""),
+            supersede_id=data.get("supersede_id"),
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(dict(row))
+
+
+@mcp.custom_route("/api/questions", methods=["GET"])
+async def api_questions_list(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    qp = request.query_params
+    conn = _db()
+    try:
+        rows = questions.list_questions(
+            conn,
+            open_only=qp.get("open") == "1",
+            to_actor=actor if qp.get("to_me") == "1" else None,
+            attach_type=qp.get("attach_type"),
+            attach_id=int(qp["attach_id"])
+            if qp.get("attach_id", "").isdigit()
+            else None,
+            project_id=int(qp["project"]) if qp.get("project", "").isdigit() else None,
+        )
+    finally:
+        conn.close()
+    return JSONResponse([dict(r) for r in rows])
+
+
+@mcp.custom_route("/api/questions", methods=["POST"])
+async def api_questions_ask(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        qid = questions.ask(
+            conn,
+            actor,
+            data.get("project_id", 0),
+            data.get("body", ""),
+            to_identity_id=data.get("to_identity_id"),
+            to_group=data.get("to_group"),
+            attach_type=data.get("attach_type"),
+            attach_id=data.get("attach_id"),
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"id": qid}, status_code=201)
+
+
+@mcp.custom_route("/api/questions/{qid:int}/answer", methods=["POST"])
+async def api_question_answer(request: Request) -> JSONResponse:
+    qid = request.path_params["qid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        row = questions.answer(conn, actor, qid, data.get("answer", ""))
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(dict(row))
+
+
+@mcp.custom_route("/api/questions/{qid:int}/withdraw", methods=["POST"])
+async def api_question_withdraw(request: Request) -> JSONResponse:
+    qid = request.path_params["qid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        row = questions.withdraw(conn, actor, qid)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(dict(row))
+
+
+@mcp.custom_route("/api/questions/{qid:int}/reassign", methods=["POST"])
+async def api_question_reassign(request: Request) -> JSONResponse:
+    qid = request.path_params["qid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        row = questions.reassign(conn, actor, qid, data.get("to_identity_id", 0))
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(dict(row))
+
+
+@mcp.custom_route("/api/links", methods=["POST"])
+async def api_links_create(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        lid = links.create(
+            conn,
+            actor,
+            data.get("from_type", ""),
+            data.get("from_id", 0),
+            data.get("to_type", ""),
+            data.get("to_id", 0),
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"id": lid}, status_code=201)
+
+
+@mcp.custom_route("/api/links/{lid:int}", methods=["DELETE"])
+async def api_links_remove(request: Request) -> JSONResponse:
+    lid = request.path_params["lid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        links.remove(conn, actor, lid)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return Response(status_code=204)
+
+
+@mcp.custom_route("/api/context", methods=["GET"])
+async def api_context(request: Request) -> JSONResponse:
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    qp = request.query_params
+    conn = _db()
+    try:
+        rows = links.context_for(
+            conn, qp.get("type", ""), int(qp["id"]) if qp.get("id", "").isdigit() else 0
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _com_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(rows)
+
+
+@mcp.custom_route("/api/search", methods=["GET"])
+async def api_search(request: Request) -> JSONResponse:
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    qp = request.query_params
+    conn = _db()
+    try:
+        rows = search.search(
+            conn,
+            qp.get("q", ""),
+            project_id=int(qp["project"]) if qp.get("project", "").isdigit() else None,
+            kind=qp.get("kind"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    finally:
+        conn.close()
+    return JSONResponse(rows)
+
+
+def _know_error(exc: Exception) -> JSONResponse:
+    if isinstance(exc, knowledge.Frozen):
+        return JSONResponse(
+            {"error": str(exc), "questions": exc.questions}, status_code=409
+        )
+    if isinstance(exc, (knowledge.KnowledgeError, claims.ClaimError)):
+        msg = str(exc)
+        code = 404 if msg.startswith("no such") else 422
+        return JSONResponse({"error": msg}, status_code=code)
+    return _com_error(exc)
+
+
+@mcp.custom_route("/api/projects/{pid:int}/notes", methods=["GET"])
+async def api_notes_list(request: Request) -> JSONResponse:
+    pid = request.path_params["pid"]
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        rows = knowledge.list_notes(conn, pid)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _know_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse([dict(r) for r in rows])
+
+
+@mcp.custom_route("/api/projects/{pid:int}/notes", methods=["POST"])
+async def api_notes_create(request: Request) -> JSONResponse:
+    pid = request.path_params["pid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        nid = knowledge.create_note(
+            conn,
+            actor,
+            pid,
+            data.get("title", ""),
+            body=data.get("body", ""),
+            tags=data.get("tags", ""),
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _know_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"id": nid}, status_code=201)
+
+
+@mcp.custom_route("/api/notes/{nid:int}", methods=["GET"])
+async def api_note_get(request: Request) -> JSONResponse:
+    nid = request.path_params["nid"]
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        note = dict(knowledge.get_note(conn, nid))
+        revs = [dict(r) for r in knowledge.note_revisions(conn, nid)]
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _know_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"note": note, "revisions": revs})
+
+
+@mcp.custom_route("/api/notes/{nid:int}", methods=["PATCH"])
+async def api_note_edit(request: Request) -> JSONResponse:
+    nid = request.path_params["nid"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        row = knowledge.edit_note(
+            conn,
+            actor,
+            nid,
+            title=data.get("title"),
+            body=data.get("body"),
+            tags=data.get("tags"),
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _know_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(dict(row))
+
+
+@mcp.custom_route("/api/wiki", methods=["GET"])
+async def api_wiki_list(request: Request) -> JSONResponse:
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        rows = knowledge.list_wiki(conn)
+    finally:
+        conn.close()
+    return JSONResponse([dict(r) for r in rows])
+
+
+@mcp.custom_route("/api/wiki", methods=["POST"])
+async def api_wiki_create(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        wid = knowledge.create_wiki(
+            conn,
+            actor,
+            data.get("slug", ""),
+            data.get("title", ""),
+            body=data.get("body", ""),
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _know_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"id": wid}, status_code=201)
+
+
+@mcp.custom_route("/api/wiki/{slug}", methods=["GET"])
+async def api_wiki_get(request: Request) -> JSONResponse:
+    slug = request.path_params["slug"]
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        page = dict(knowledge.get_wiki(conn, slug))
+        revs = [dict(r) for r in knowledge.wiki_revisions(conn, slug)]
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _know_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"page": page, "revisions": revs})
+
+
+@mcp.custom_route("/api/wiki/{slug}", methods=["PATCH"])
+async def api_wiki_edit(request: Request) -> JSONResponse:
+    slug = request.path_params["slug"]
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        row = knowledge.edit_wiki(
+            conn, actor, slug, title=data.get("title"), body=data.get("body")
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _know_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(dict(row))
+
+
+@mcp.custom_route("/api/claims", methods=["GET"])
+async def api_claims_check(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    qp = request.query_params
+    conn = _db()
+    try:
+        if qp.get("path"):
+            rows = claims.check_claims(conn, qp["path"], actor)
+        else:
+            rows = [dict(r) for r in claims.list_my_claims(conn, actor)]
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _know_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse(rows)
+
+
+@mcp.custom_route("/api/claims", methods=["POST"])
+async def api_claims_set(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        count = claims.set_claims(
+            conn, actor, data.get("paths"), note=data.get("note", "")
+        )
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _know_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"claims": count}, status_code=201)
+
+
+@mcp.custom_route("/api/claims/release", methods=["POST"])
+async def api_claims_release(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        count = claims.release_claims(conn, actor, data.get("paths"))
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _know_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"claims": count})
+
+
+def _qint(qp, name):
+    v = qp.get(name)
+    return int(v) if v and v.isdigit() else None
 
 
 @mcp.custom_route("/api/stream", methods=["GET"])
-@_api
 async def api_stream(request: Request) -> StreamingResponse:
-    """Server-sent events: the townhall, live.
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    qp = request.query_params
+    f = realtime.Filters(
+        obj_type=qp.get("type") or None,
+        obj_id=_qint(qp, "id"),
+        project_id=_qint(qp, "project"),
+        verb=qp.get("verb") or None,
+        to_identity_id=actor["id"] if qp.get("to_me") == "1" else _qint(qp, "to"),
+    )
+    since = _qint(qp, "since") or 0
 
-    Query params:
-      name       drop events whose actor is this agent (self-noise filter)
-      project    only events for this project (slug or id; chat is global)
-      channel    only chat messages from this channel
-      types      comma list of {event, chat} (default both)
-      since_id   replay events-table rows with id > since_id first
-    """
-    params = request.query_params
-    raw_types = {t.strip() for t in params.get("types", "event,chat").split(",")}
-    types = raw_types & STREAM_TYPES or STREAM_TYPES
-    name = params.get("name")
-    channel = params.get("channel")
-    project_id = _project_param(request)
-    try:
-        since_id = int(params.get("since_id", "0"))
-    except ValueError:
-        raise ValueError("since_id must be an integer")
+    async def gen():
+        from app.bus import bus as live_bus
+        from app.bus import sse_frame
 
-    def want(event: dict) -> bool:
-        if event.get("type") not in types:
-            return False
-        if name and event.get("actor") == name:
-            return False
-        if event.get("type") == "chat":
-            return channel is None or event.get("channel") == channel
-        return project_id is None or event.get("project_id") in (None, project_id)
-
-    subscriber = bus.subscribe(want)
-    queue = subscriber[0]
-
-    async def generate():
-        max_id = since_id
+        conn = _db()
         try:
-            yield ": stream open\n\n"
-            if since_id > 0:
-                with _db() as conn:
-                    rows = store.list_events(conn, project_id=project_id, limit=500)
-                for row in reversed(rows):
-                    if int(row["id"]) > since_id:
-                        max_id = max(max_id, int(row["id"]))
-                        replayed = dict(row, type="event")
-                        if want(replayed):
-                            yield f"data: {json.dumps(replayed)}\n\n"
+            backlog = events.feed(
+                conn,
+                since=since,
+                project_id=f.project_id,
+                obj_type=f.obj_type,
+                obj_id=f.obj_id,
+                to_identity_id=f.to_identity_id,
+                limit=500,
+            )
+        finally:
+            conn.close()
+        last = since
+        for ev in backlog:
+            if f.matches(ev):
+                last = max(last, ev["id"])
+                yield sse_frame(ev)
+        q = live_bus.subscribe()
+        try:
+            import asyncio as _a
+
             while True:
+                if await request.is_disconnected():
+                    return
                 try:
-                    event = await asyncio.wait_for(
-                        queue.get(), timeout=STREAM_HEARTBEAT
-                    )
-                except asyncio.TimeoutError:
+                    ev = await _a.wait_for(q.get(), realtime.STREAM_HEARTBEAT)
+                except TimeoutError:
                     yield ": ping\n\n"
                     continue
-                if isinstance(event.get("id"), int) and event["id"] <= max_id:
+                if ev["id"] <= last or not f.matches(ev):
                     continue
-                if isinstance(event.get("id"), int):
-                    max_id = event["id"]
-                yield f"data: {json.dumps(event)}\n\n"
+                last = ev["id"]
+                yield sse_frame(ev)
         finally:
-            bus.unsubscribe(subscriber)
+            live_bus.unsubscribe(q)
 
     return StreamingResponse(
-        generate(),
+        gen(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-@mcp.custom_route("/api/posts/{post_id:int}/wait", methods=["GET"])
-@_api
-async def api_wait_post(request: Request) -> JSONResponse | Response:
-    """Long-poll: block until the post moves (new comment or close).
-
-    Query params: timeout seconds (1-300, default 60); since epoch — only
-    activity strictly newer than this counts (default: now). Returns the
-    activity snapshot, or 204 when the timeout passes untouched.
-    """
+@mcp.custom_route("/api/wait", methods=["GET"])
+async def api_wait(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    qp = request.query_params
     try:
-        timeout = min(max(float(request.query_params.get("timeout", "60")), 1.0), 300.0)
+        timeout = float(qp.get("timeout", "10"))
     except ValueError:
-        raise ValueError("timeout must be a number")
-    try:
-        since = float(request.query_params.get("since", "0"))
-    except ValueError:
-        raise ValueError("since must be a number")
-    if since <= 0:
-        since = time.time()
-    deadline = time.time() + timeout
-    while True:
-        with _db() as conn:
-            snapshot = store.post_wait_snapshot(conn, request.path_params["post_id"])
-        if snapshot is None:
-            return JSONResponse({"error": "post not found"}, status_code=404)
-        if snapshot["last_activity"] > since or (snapshot["closed_at"] or 0) > since:
-            return JSONResponse(snapshot)
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            return Response(status_code=204, headers={"X-SlopClanker-Timeout": "1"})
-        await asyncio.sleep(min(0.5, remaining))
-
-
-# --- todos -----------------------------------------------------------------
-
-
-@mcp.custom_route("/api/posts/{post_id:int}", methods=["DELETE"])
-@_api
-async def api_delete_post(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require_admin(data)
-    with _db() as conn:
-        store.delete_post(conn, request.path_params["post_id"])
-    return JSONResponse({"ok": True})
-
-
-@mcp.custom_route("/api/comments/{comment_id:int}", methods=["DELETE"])
-@_api
-async def api_delete_comment(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require_admin(data)
-    with _db() as conn:
-        store.delete_comment(conn, request.path_params["comment_id"])
-    return JSONResponse({"ok": True})
-
-
-@mcp.custom_route("/api/todos", methods=["POST"])
-@_api
-async def api_add_todo(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require(data, "author")
-    with _db() as conn:
-        tid = store.add_todo(
-            conn,
-            created_by=data["author"],
-            title=data.get("title", ""),
-            body=data.get("body", ""),
-            priority=data.get("priority", "medium"),
-            tags=data.get("tags", ""),
-            assignee=data.get("assignee"),
-            project_id=_project_param(request, data) or 1,
-        )
-    return JSONResponse({"id": tid})
-
-
-@mcp.custom_route("/api/todos", methods=["GET"])
-@_api
-async def api_list_todos(request: Request) -> JSONResponse:
-    params = request.query_params
-    assignee = params.get("assignee")
-    status = params.get("status", "open")
-    with _db() as conn:
-        todos = store.list_todos(
-            conn,
-            project_id=_project_param(request),
-            assignee=assignee,
-            name=params.get("name"),
-            status=status,
-        )
-    return JSONResponse(todos)
-
-
-@mcp.custom_route("/api/todos/{todo_id:int}", methods=["PATCH"])
-@_api
-async def api_update_todo(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    if "project" in data:
-        raise ValueError("use query param ?project= to move todos between projects")
-    with _db() as conn:
-        todo = store.update_todo(
-            conn,
-            request.path_params["todo_id"],
-            actor=data.get("actor", ""),
-            **{k: v for k, v in data.items() if k != "actor"},
-        )
-    return JSONResponse(todo)
-
-
-@mcp.custom_route("/api/todos/{todo_id:int}/done", methods=["POST"])
-@_api
-async def api_done_todo(request: Request) -> JSONResponse:
-    data = (
-        {}
-        if request.headers.get("content-length") == "0"
-        else await _json_body(request)
+        timeout = 10.0
+    rows = await realtime.wait_for(
+        actor["id"],
+        obj_type=qp.get("type") or None,
+        obj_id=_qint(qp, "id"),
+        project_id=_qint(qp, "project"),
+        verb=qp.get("verb") or None,
+        to_me=qp.get("to_me") == "1",
+        timeout=timeout,
+        since=_qint(qp, "since") or 0,
+        db_path=db.db_path(),
     )
-    with _db() as conn:
-        store.done_todo(conn, request.path_params["todo_id"], data.get("actor", ""))
-    return JSONResponse({"ok": True})
+    return JSONResponse({"events": rows})
 
 
-@mcp.custom_route("/api/todos/{todo_id:int}/reopen", methods=["POST"])
-@_api
-async def api_reopen_todo(request: Request) -> JSONResponse:
-    with _db() as conn:
-        store.reopen_todo(conn, request.path_params["todo_id"])
-    return JSONResponse({"ok": True})
-
-
-@mcp.custom_route("/api/todos/{todo_id:int}/archive", methods=["POST"])
-@_api
-async def api_archive_todo(request: Request) -> JSONResponse:
-    with _db() as conn:
-        store.archive_todo(conn, request.path_params["todo_id"])
-    return JSONResponse({"ok": True})
-
-
-@mcp.custom_route("/api/todos/{todo_id:int}/unarchive", methods=["POST"])
-@_api
-async def api_unarchive_todo(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    with _db() as conn:
-        store.unarchive_todo(
-            conn, request.path_params["todo_id"], data.get("actor", "")
-        )
-    return JSONResponse({"ok": True})
-
-
-# --- notes -----------------------------------------------------------------
-
-
-@mcp.custom_route("/api/notes", methods=["GET"])
-@_api
-async def api_list_notes(request: Request) -> JSONResponse:
-    with _db() as conn:
-        return JSONResponse(store.list_notes(conn, _project_param(request)))
-
-
-@mcp.custom_route("/api/notes", methods=["POST"])
-@_api
-async def api_create_note(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require(data, "title", "author")
-    with _db() as conn:
-        nid = store.save_note(
-            conn,
-            data["title"],
-            created_by=data["author"],
-            body=data.get("body", ""),
-            project_id=_project_param(request) or int(data.get("project_id", 1)),
-            tags=data.get("tags", ""),
-        )
-    return JSONResponse({"id": nid})
-
-
-@mcp.custom_route("/api/notes/{note_id:int}", methods=["GET"])
-@_api
-async def api_get_note(request: Request) -> JSONResponse:
-    with _db() as conn:
-        note = store.get_note(conn, request.path_params["note_id"])
-    if note is None:
-        return JSONResponse({"error": "note not found"}, status_code=404)
-    return JSONResponse(note)
-
-
-@mcp.custom_route("/api/notes/{note_id:int}", methods=["PUT"])
-@_api
-async def api_update_note(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require(data, "title", "author")
-    with _db() as conn:
-        store.save_note(
-            conn,
-            data["title"],
-            created_by=data["author"],
-            body=data.get("body", ""),
-            note_id=request.path_params["note_id"],
-            tags=data.get("tags", ""),
-        )
-        note = store.get_note(conn, request.path_params["note_id"])
-    return JSONResponse(note)
-
-
-# --- wiki ------------------------------------------------------------------
-
-
-@mcp.custom_route("/api/wiki", methods=["GET"])
-@_api
-async def api_list_pages(request: Request) -> JSONResponse:
-    with _db() as conn:
-        return JSONResponse(store.list_pages(conn, _project_param(request)))
-
-
-@mcp.custom_route("/api/wiki", methods=["POST"])
-@_api
-async def api_create_page(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require(data, "title", "author")
-    with _db() as conn:
-        slug = store.save_page(
-            conn,
-            data["title"],
-            created_by=data["author"],
-            body=data.get("body", ""),
-            slug=data.get("slug"),
-            project_id=_project_param(request) or int(data.get("project_id", 1)),
-        )
-    return JSONResponse({"slug": slug})
-
-
-@mcp.custom_route("/api/wiki/{slug}", methods=["GET"])
-@_api
-async def api_get_page(request: Request) -> JSONResponse:
-    with _db() as conn:
-        page = store.get_page(conn, request.path_params["slug"])
-    if page is None:
-        return JSONResponse({"error": "page not found"}, status_code=404)
-    return JSONResponse(page)
-
-
-@mcp.custom_route("/api/wiki/{slug}", methods=["PUT"])
-@_api
-async def api_update_page(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require(data, "title", "author")
-    with _db() as conn:
-        existing = store.get_page(conn, request.path_params["slug"])
-        if existing is None:
-            return JSONResponse({"error": "page not found"}, status_code=404)
-        store.save_page(
-            conn,
-            data["title"],
-            created_by=data["author"],
-            body=data.get("body", ""),
-            slug=request.path_params["slug"],
-            page_id=int(existing["id"]),
-        )
-        page = store.get_page(conn, request.path_params["slug"])
-    return JSONResponse(page)
-
-
-# --- chat ------------------------------------------------------------------
-
-
-@mcp.custom_route("/api/chat", methods=["GET"])
-@_api
-async def api_chat_list(request: Request) -> JSONResponse:
-    params = request.query_params
+@mcp.custom_route("/api/inbox", methods=["GET"])
+async def api_inbox(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
     try:
-        since = float(params.get("since", "0"))
-    except ValueError:
-        return JSONResponse({"error": "since must be a number"}, status_code=400)
-    with _db() as conn:
-        return JSONResponse(
-            store.chat_list(conn, channel=params.get("channel", "general"), since=since)
+        rows = events.unread_for(
+            conn, actor["id"], obj_type=request.query_params.get("type"), limit=200
         )
+        for r in rows:
+            r["read_at"] = None
+    finally:
+        conn.close()
+    return JSONResponse(rows)
 
 
-@mcp.custom_route("/api/chat", methods=["POST"])
-@_api
-async def api_chat_send(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require(data, "author", "body")
-    with _db() as conn:
-        cid = store.chat_send(
-            conn, data["author"], data["body"], channel=data.get("channel", "general")
-        )
-    return JSONResponse({"id": cid})
-
-
-# --- events / activity -----------------------------------------------------
+@mcp.custom_route("/api/inbox/read", methods=["POST"])
+async def api_inbox_read(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        data = await _json_body(request)
+    except _BadBody as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    conn = _db()
+    try:
+        ids = [int(i) for i in data.get("event_ids", []) if str(i).isdigit()][:500]
+        n = events.mark_read(conn, actor["id"], ids)
+    finally:
+        conn.close()
+    return JSONResponse({"read": n})
 
 
 @mcp.custom_route("/api/events", methods=["GET"])
-@_api
-async def api_events(request: Request) -> JSONResponse:
+async def api_events_feed(request: Request) -> JSONResponse:
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    qp = request.query_params
+    conn = _db()
     try:
-        limit = int(request.query_params.get("limit", "200"))
-    except ValueError:
-        limit = 200
-    with _db() as conn:
-        return JSONResponse(
-            store.list_events(conn, project_id=_project_param(request), limit=limit)
-        )
+        if qp.get("desc") == "1":
+            # newest-first page for list UIs (feed/since stays ascending)
+            rows = events.feed_recent(
+                conn,
+                project_id=_qint(qp, "project"),
+                obj_type=qp.get("type") or None,
+                obj_id=_qint(qp, "id"),
+                to_identity_id=_qint(qp, "to"),
+                limit=_qint(qp, "limit") or 100,
+            )
+        else:
+            rows = events.feed(
+                conn,
+                since=_qint(qp, "since") or 0,
+                project_id=_qint(qp, "project"),
+                obj_type=qp.get("type") or None,
+                obj_id=_qint(qp, "id"),
+                to_identity_id=_qint(qp, "to"),
+                limit=_qint(qp, "limit") or 100,
+            )
+    finally:
+        conn.close()
+    return JSONResponse(rows)
 
-
-# --- agents ----------------------------------------------------------------
-
-
-@mcp.custom_route("/api/agents", methods=["GET"])
-@_api
-async def api_list_agents(request: Request) -> JSONResponse:
-    with _db() as conn:
-        return JSONResponse(
-            store.list_agents(conn, heartbeat_timeout=_heartbeat_timeout())
-        )
-
-
-@mcp.custom_route("/api/agents/{name}", methods=["GET"])
-@_api
-async def api_get_agent(request: Request) -> JSONResponse:
-    with _db() as conn:
-        agent = store.get_agent(conn, request.path_params["name"])
-        if agent is None:
-            return JSONResponse({"error": "agent not found"}, status_code=404)
-        agent["active"] = time.time() - agent["last_seen"] <= _heartbeat_timeout()
-        agent["claims"] = store.agent_claims(conn, request.path_params["name"])
-    return JSONResponse(agent)
-
-
-@mcp.custom_route("/api/agents/{name}", methods=["PUT"])
-@_api
-async def api_put_agent(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    with _db() as conn:
-        agent = store.profile_set(
-            conn,
-            request.path_params["name"],
-            note=data.get("note"),
-            role=data.get("role"),
-            contact=data.get("contact"),
-        )
-    return JSONResponse(agent)
-
-
-# --- claims ----------------------------------------------------------------
-
-
-@mcp.custom_route("/api/claims", methods=["POST"])
-@_api
-async def api_set_claims(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require(data, "agent", "paths")
-    if not isinstance(data["paths"], list):
-        raise TypeError("paths must be a list")
-    with _db() as conn:
-        count = store.set_claims(
-            conn, data["agent"], data["paths"], note=data.get("note")
-        )
-    return JSONResponse({"claims": count})
-
-
-@mcp.custom_route("/api/claims", methods=["GET"])
-@_api
-async def api_check_claims(request: Request) -> JSONResponse:
-    path = request.query_params.get("path")
-    if not path:
-        return JSONResponse(
-            {"error": "missing required query param: path"}, status_code=400
-        )
-    with _db() as conn:
-        found = store.check_claims(
-            conn,
-            path,
-            agent=request.query_params.get("agent"),
-            heartbeat_timeout=_heartbeat_timeout(),
-        )
-    return JSONResponse(found)
-
-
-@mcp.custom_route("/api/claims", methods=["DELETE"])
-@_api
-async def api_release_claims(request: Request) -> JSONResponse:
-    data = await _json_body(request)
-    _require(data, "agent", "paths")
-    if not isinstance(data["paths"], list):
-        raise TypeError("paths must be a list")
-    with _db() as conn:
-        store.release_claims(conn, data["agent"], data["paths"])
-    return JSONResponse({"ok": True})
-
-
-# --- awareness -------------------------------------------------------------
-
-
-@mcp.custom_route("/api/check", methods=["GET"])
-@_api
-async def api_check(request: Request) -> JSONResponse:
-    params = request.query_params
-    if not params.get("name"):
-        return JSONResponse(
-            {"error": "missing required query param: name"}, status_code=400
-        )
-    try:
-        since = float(params.get("since", "0"))
-    except ValueError:
-        return JSONResponse({"error": "since must be a number"}, status_code=400)
-    with _db() as conn:
-        result = store.check(conn, params["name"], since=since)
-    return JSONResponse(result)
-
-
-class IngressPath:
-    """Strip the Home Assistant ingress prefix so routes match.
-
-    HA ingress forwards ``/api/hassio_ingress/<token>/foo`` as-is and sets
-    ``X-Ingress-Path: /api/hassio_ingress/<token>``. Browsers keep the
-    prefixed URLs (the UI uses relative paths); we strip the prefix for
-    routing only.
-    """
-
-    def __init__(self, app: Any) -> None:
-        self.app = app
-
-    async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:
-        if scope["type"] == "http":
-            headers = {k.lower(): v for k, v in scope.get("headers", [])}
-            prefix = headers.get(b"x-ingress-path", b"").decode("latin-1")
-            path = scope.get("path", "")
-            if prefix and path.startswith(prefix):
-                scope = dict(scope)
-                scope["path"] = path[len(prefix) :] or "/"
-        await self.app(scope, receive, send)
-
-
-class BearerAuth:
-    """Pure ASGI middleware: bearer token on /api and /mcp; public paths skip.
-
-    Token is read per request from SLOPCLANKER_TOKEN; when unset (dev/tests
-    without auth) everything is allowed.
-    """
-
-    def __init__(self, app: Any) -> None:
-        self.app = app
-
-    async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:
-        if scope["type"] == "http" and scope.get("path") not in PUBLIC_PATHS:
-            token = os.environ.get("SLOPCLANKER_TOKEN")
-            if token:
-                headers = {k.lower(): v for k, v in scope.get("headers", [])}
-                auth = headers.get(b"authorization", b"").decode("latin-1")
-                expected = f"Bearer {token}".encode()
-                if not hmac.compare_digest(auth.encode("utf-8", "replace"), expected):
-                    await JSONResponse({"error": "unauthorized"}, status_code=401)(
-                        scope, receive, send
-                    )
-                    return
-        await self.app(scope, receive, send)
-
-
-from app.tools import register as _register_tools
-
-_register_tools(mcp)
 
 asgi_app = mcp.http_app(
-    path="/mcp", middleware=[Middleware(IngressPath), Middleware(BearerAuth)]
+    path="/mcp", middleware=[Middleware(IngressPath), Middleware(BearerIdentity)]
 )
 
 
 def main() -> None:
-    """Entry point for the add-on (run.sh execs `python3 -m app.main`).
-
-    Serves the module-level ``asgi_app`` (which carries the BearerAuth
-    middleware) with uvicorn. Do NOT use ``mcp.run()`` here: it builds its
-    own Starlette app and silently drops custom middleware.
-    """
-    import uvicorn
-
-    host = os.environ.get("SLOPCLANKER_HOST", "0.0.0.0")
+    """Entrypoint for the add-on (run.sh execs python3 -m app.main)."""
+    bootstrap.ensure(db.db_path())
+    host = os.environ.get("SLOPCLANKER_HOST", "0.0.0.0")  # nosec B104
     port = int(os.environ.get("SLOPCLANKER_PORT", "8090"))
     uvicorn.run(asgi_app, host=host, port=port, log_level="info")
 
