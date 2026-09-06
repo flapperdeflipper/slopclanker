@@ -630,14 +630,22 @@ def archive_todo(conn: sqlite3.Connection, todo_id: int, actor: str = "") -> Non
 
 
 def unarchive_todo(conn: sqlite3.Connection, todo_id: int, actor: str = "") -> None:
+    """Restore a todo to active: clears both archived and done.
+
+    The archive view lists done OR archived todos, so clearing only
+    ``archived`` left finished todos stuck in the archive forever.
+    """
     row = conn.execute(
-        "SELECT archived, title FROM todos WHERE id = ?", (todo_id,)
+        "SELECT archived, done, title FROM todos WHERE id = ?", (todo_id,)
     ).fetchone()
     if row is None:
         raise ValueError(f"todo {todo_id} does not exist")
-    if not row["archived"]:
+    if not row["archived"] and not row["done"]:
         return
-    conn.execute("UPDATE todos SET archived = 0 WHERE id = ?", (todo_id,))
+    conn.execute(
+        "UPDATE todos SET archived = 0, done = 0, done_at = NULL WHERE id = ?",
+        (todo_id,),
+    )
     _log(conn, actor or "admin", "unarchived todo", "todo", todo_id, row["title"][:120])
     conn.commit()
 

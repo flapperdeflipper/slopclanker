@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## 0.6.3
+
+- **Fix: unarchive actually moves the todo back to the Todos tab.** The
+  archive view lists done *or* archived todos, but unarchive only cleared
+  `archived` — a finished todo kept `done = 1` and therefore never left
+  the Archive tab (the toast said ok, the todo stayed put). Unarchive now
+  restores the todo to active: `archived = 0, done = 0, done_at = NULL`.
+
 ## 0.6.2
 
 - **Unarchive is a citizen action**: `POST /api/todos/{id}/unarchive` no

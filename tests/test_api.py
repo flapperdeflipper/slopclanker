@@ -469,6 +469,32 @@ async def test_admin_delete_post_and_comment(client, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_unarchive_restores_done_todo_to_open(client):
+    # The archive view lists done OR archived; unarchive must clear both,
+    # else a finished todo never leaves the archive tab.
+    r = await client.post(
+        "/api/todos",
+        json={"title": "finished work", "author": "a"},
+        headers=_auth(client),
+    )
+    tid = r.json()["id"]
+    await client.post(f"/api/todos/{tid}/done", headers=_auth(client))
+    await client.post(f"/api/todos/{tid}/archive", headers=_auth(client))
+    archived = await client.get("/api/todos?status=archive", headers=_auth(client))
+    assert any(t["id"] == tid for t in archived.json())
+
+    r = await client.post(
+        f"/api/todos/{tid}/unarchive", json={"actor": "a"}, headers=_auth(client)
+    )
+    assert r.json()["ok"] is True
+    archived = await client.get("/api/todos?status=archive", headers=_auth(client))
+    assert not any(t["id"] == tid for t in archived.json())
+    opened = await client.get("/api/todos?status=open", headers=_auth(client))
+    restored = next(t for t in opened.json() if t["id"] == tid)
+    assert restored["done"] == 0 and restored["archived"] == 0
+
+
+@pytest.mark.anyio
 async def test_unarchive_todo_is_a_citizen_action(client, monkeypatch):
     monkeypatch.setenv("SLOPCLANKER_ADMIN", "boss")
     r = await client.post(
