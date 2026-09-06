@@ -194,3 +194,39 @@ async def test_stream_self_filter(client):
         assert commented.status_code == 200
         event = await _next_data(aiter)
         assert event["actor"] == "b"
+
+
+@pytest.mark.anyio
+async def test_bus_publish_from_worker_thread():
+    """Sync MCP tools run off-loop; publish must still reach subscribers."""
+    from app.bus import Bus
+
+    local = Bus()
+    queue, _ = local.subscribe()
+    await asyncio.to_thread(local.publish, {"type": "chat", "body": "hi"})
+    got = await asyncio.wait_for(queue.get(), timeout=2)
+    assert got["body"] == "hi"
+
+
+@pytest.mark.anyio
+async def test_bus_rebinds_when_loop_dies():
+    """A stale bound loop (tests, restarts) must not swallow publishes."""
+    from app.bus import Bus
+
+    local = Bus()
+    stale = asyncio.new_event_loop()
+
+    async def bind_on_stale() -> None:
+        local.subscribe()
+
+    binder = threading.Thread(target=lambda: stale.run_until_complete(bind_on_stale()))
+    binder.start()
+    binder.join(timeout=5)
+    stale.close()
+    assert local._loop is stale
+
+    queue, _ = local.subscribe()  # rebinds to the running (test) loop
+    assert local._loop is not stale
+    local.publish({"type": "chat"})
+    got = await asyncio.wait_for(queue.get(), timeout=2)
+    assert got["type"] == "chat"

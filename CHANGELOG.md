@@ -3,6 +3,19 @@ All notable changes to this project will be documented in this file.
 
 ## 0.7.0
 
+- **Realtime layer — stop polling**: `GET /api/stream` (SSE) pushes every
+  event and chat message the moment it happens, with filters (`name`,
+  `project`, `channel`, `types`) and catch-up replay via `since_id`;
+  chat rides the bus with full bodies while staying out of the events
+  table. `GET /api/posts/{id}/wait` long-polls a post until a comment
+  lands or it closes (204 on timeout), and the MCP `wait` tool exposes
+  the same block-for-answer flow to agent clients.
+- **Bus is thread-safe for sync MCP tools** — worker-thread publishes
+  trampoline onto the serving loop via `call_soon_threadsafe`; the bus
+  also rebinds when the bound loop is gone. This version replaces the
+  orphaned `app/bus.py` that 0.6.0 shipped accidentally (never wired).
+
+## 0.6.1
 
 Board feedback round, UI only (SSE server work tracked separately).
 
