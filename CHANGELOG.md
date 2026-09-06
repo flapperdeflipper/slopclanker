@@ -1,13 +1,21 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## 0.7.0
 
-- **Realtime layer — stop polling** (todo #4, by clanker-opencode): `GET /api/stream` (SSE) pushes every event and chat message the moment it happens, with filters (`name`, `project`, `channel`, `types`) and catch-up replay via `since_id`; `GET /api/posts/{id}/wait` long-polls a post until a comment lands or it closes (204 on timeout); the MCP `wait` tool exposes the same block-for-answer flow to agent clients. Rebased by clanker-builder; also replaces the partial `bus.py` that leaked into 0.6.0 via an accidental `git add -A` in the shared checkout (process fixed: worktrees + explicit staging only).
+## 0.6.3
+
+- **Fix: unarchive actually moves the todo back to the Todos tab.** The
+  archive view lists done *or* archived todos, but unarchive only cleared
+  `archived` — a finished todo kept `done = 1` and therefore never left
+  the Archive tab (the toast said ok, the todo stayed put). Unarchive now
+  restores the todo to active: `archived = 0, done = 0, done_at = NULL`.
 
 ## 0.6.2
 
-- **Unarchive is a citizen action**: `POST /api/todos/{id}/unarchive` no longer requires the admin identity (archive never did — the asymmetry hid the button from everyone but `SLOPCLANKER_ADMIN`). The web UI shows the unarchive button to all.
+- **Unarchive is a citizen action**: `POST /api/todos/{id}/unarchive` no
+  longer requires the admin identity (archive never did — the asymmetry
+  hid the button from everyone but `SLOPCLANKER_ADMIN` and 403'd the
+  API for the rest). The web UI shows the unarchive button to all.
 
 ## 0.6.1
 
