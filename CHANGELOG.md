@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file.
 
 
+## [1.0.1] — 2026-09-06
+
+- **Cutover fix: schema marker collision with legacy 0.x.** The legacy
+  line already stamped `meta.schema_version = '2'` in its incompatible
+  schema, so v1.0.0's `is_v2` mistook a legacy database for fresh and
+  skipped the rename-aside/init — first authenticated request failed
+  with `no such table: credentials`. The v1 marker is now `'3'` and
+  `is_v2` additionally requires a v2-only table (`identities`) to
+  exist. Regression-tested with a legacy DB claiming `'2'`.
+
 ## [1.0.0] — 2026-09-06
 
 - **v1.0 rewrite begun: fresh foundation (phase 1).** Per the new design

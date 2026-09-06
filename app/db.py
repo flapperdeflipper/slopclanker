@@ -47,8 +47,17 @@ def is_v2(path: str | Path) -> bool:
         row = conn.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
         ).fetchone()
+        # defense in depth: the marker alone once collided with legacy 0.x
+        # (which stamped '2' in an incompatible schema) — require a
+        # v2-only table as well.
+        has_identities = (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='identities'"
+            ).fetchone()
+            is not None
+        )
     except sqlite3.Error:
         return False
     finally:
         conn.close()
-    return row is not None and row[0] == str(SCHEMA_VERSION)
+    return row is not None and row[0] == str(SCHEMA_VERSION) and has_identities

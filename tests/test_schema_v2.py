@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from app import db
+from app.schema import SCHEMA_VERSION
 
 EXPECTED_TABLES = {
     "meta",
@@ -71,7 +72,7 @@ def test_init_creates_all_tables_and_version(tmp_path):
     version = conn.execute(
         "SELECT value FROM meta WHERE key='schema_version'"
     ).fetchone()[0]
-    assert version == "2"
+    assert version == str(SCHEMA_VERSION) == "3"  # 2 collided with legacy 0.x
     conn.close()
 
 
