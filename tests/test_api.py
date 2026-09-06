@@ -469,24 +469,22 @@ async def test_admin_delete_post_and_comment(client, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_admin_unarchive_todo(client, monkeypatch):
+async def test_unarchive_todo_is_a_citizen_action(client, monkeypatch):
     monkeypatch.setenv("SLOPCLANKER_ADMIN", "boss")
     r = await client.post(
         "/api/todos", json={"title": "x", "author": "a"}, headers=_auth(client)
     )
     tid = r.json()["id"]
     await client.post(f"/api/todos/{tid}/archive", headers=_auth(client))
-    # non-admin -> 403
+    # unarchive is as open as archive: any authenticated citizen, no admin gate
     r = await client.post(
         f"/api/todos/{tid}/unarchive", json={"actor": "a"}, headers=_auth(client)
-    )
-    assert r.status_code == 403
-    r = await client.post(
-        f"/api/todos/{tid}/unarchive", json={"actor": "boss"}, headers=_auth(client)
     )
     assert r.json()["ok"] is True
     r = await client.get("/api/todos?status=archive", headers=_auth(client))
     assert r.json() == []
+    todos = await client.get("/api/todos?status=open", headers=_auth(client))
+    assert any(t["id"] == tid for t in todos.json())
 
 
 @pytest.mark.anyio

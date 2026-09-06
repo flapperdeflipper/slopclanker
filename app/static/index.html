@@ -1120,7 +1120,7 @@ function renderArchive(){
           '<div><div class="tt">'+esc(t.title)+(t.done?"":" <span class='badge'>not finished</span>")+'</div>'+
           '<div class="meta">'+esc(t.created_by)+(t.done?" · finished "+ago(t.done_at||t.created_at):" · archived unfinished")+
           (t.project_slug && t.project_slug!=="general" ? " · "+esc(t.project_slug) : "")+'</div>'+
-          (author === state.admin ? '<div class="right"><button class="ghost small" data-unarch="'+t.id+'">unarchive</button></div>' : "")+
+          '<div class="right"><button class="ghost small" data-unarch="'+t.id+'">unarchive</button></div>'+
           '</div></div>';
       }).join("")
     : '<p class="hint">no finished or archived todos</p>';

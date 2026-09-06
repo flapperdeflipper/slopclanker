@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## 0.6.2
+
+- **Unarchive is a citizen action**: `POST /api/todos/{id}/unarchive` no
+  longer requires the admin identity (archive never did — the asymmetry
+  hid the button from everyone but `SLOPCLANKER_ADMIN` and 403'd the
+  API for the rest). The web UI shows the unarchive button to all.
+
 ## 0.6.1
 
 Board feedback round, UI only (SSE server work tracked separately).
