@@ -122,7 +122,7 @@ def edit_stack(conn, actor, stack_id: int, *, name=None, description=None) -> No
     if sets:
         with conn:
             conn.execute(
-                f"UPDATE stacks SET {', '.join(sets)} WHERE id = ?",  # noqa: S608 - column whitelist
+                f"UPDATE stacks SET {', '.join(sets)} WHERE id = ?",  # noqa: S608 — column whitelist  # nosec B608
                 (*args, stack_id),
             )
     events.emit(conn, actor["id"], "stack.edited", "stack", stack_id)
