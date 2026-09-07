@@ -463,7 +463,7 @@ async function boot() {
   try { ME = await api("GET", "/api/auth/whoami"); }
   catch { return; }
   const tabs = [["attention", "Attention"], ["activity", "Activity"],
-                ["organize", "Organize"]];
+                ["organize", "Organize"], ["settings", "Settings"]];
   if (ME.role === "admin" || ME.role === "superadmin")
     tabs.push(["identities", "Admin"]);
   $("#nav").innerHTML = tabs.map(t =>
@@ -712,8 +712,10 @@ async function view_home() {
   const main = $("#main");
   await shell_load().catch(() => { });
   const pref_stack = parseInt(SHELL.prefs.default_stack, 10);
+  const pref_project = parseInt(SHELL.prefs.default_project, 10);
   const live = SHELL.projects.filter(p => !p.archived);
-  const target = live.find(p => p.stack_id === pref_stack)
+  const target = live.find(p => p.id === pref_project)
+    || live.find(p => p.stack_id === pref_stack)
     || live.find(p => p.stack_id) || live[0];
   if (target) { location.hash = `#/project/${target.id}/board`; return; }
   main.innerHTML = `
@@ -1433,6 +1435,95 @@ async function view_organize() {
 }
 ROUTES.push({ name: "organize", view: view_organize });
 
+/* ================= Settings: account + preferences ================= */
+async function view_settings() {
+  tab_highlight("settings");
+  const main = $("#main");
+  const is_human = ME.kind === "human";
+  const stacks = () => SHELL.stacks.filter(x => !x.archived);
+  const projects = () => SHELL.projects.filter(p => !p.archived);
+  const reload = async () => {
+    await shell_load();
+    render();
+  };
+  const render = () => {
+    const pref_stack = SHELL.prefs.default_stack || "";
+    const pref_project = SHELL.prefs.default_project || "";
+    main.innerHTML = page_head({
+      type: "ACCOUNT", title: "Settings",
+      meta: `<span class="dim small">signed in as ${esc(ME.name)} · ${esc(ME.role || ME.kind)}</span>`,
+    })
+    + `<div class="grid" style="grid-template-columns:1fr 1fr;align-items:start">
+      <div class="card"><h3>Landing preferences</h3>
+        <p class="dim small">Where you land after login and on the frontpage.
+        A default project wins over the default stack.</p>
+        <label class="small dim" style="display:block;margin:8px 0 3px">default stack</label>
+        <select id="pr-stack" style="width:100%">
+          <option value="">— none —</option>
+          ${stacks().map(x =>
+            `<option value="${x.id}" ${String(pref_stack) === String(x.id) ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+        </select>
+        <label class="small dim" style="display:block;margin:8px 0 3px">default project</label>
+        <select id="pr-project" style="width:100%">
+          <option value="">— none (first project of the default stack) —</option>
+          ${stacks().map(x => {
+            const gp = projects().filter(p => p.stack_id === x.id);
+            return gp.length ? `<optgroup label="${esc(x.name)}">${gp.map(p =>
+              `<option value="${p.id}" ${String(pref_project) === String(p.id) ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</optgroup>` : "";
+          }).join("")}
+          ${projects().filter(p => !p.stack_id).length ? `<optgroup label="No stack">${
+            projects().filter(p => !p.stack_id).map(p =>
+            `<option value="${p.id}" ${String(pref_project) === String(p.id) ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</optgroup>` : ""}
+        </select>
+        <div class="row" style="margin-top:12px">
+          <button class="pri" id="pr-save">save preferences</button>
+        </div></div>
+      <div class="grid">
+        ${is_human ? `<div class="card"><h3>Change password</h3>
+          <label class="small dim" style="display:block;margin:8px 0 3px">current password</label>
+          <input id="pw-cur" type="password" autocomplete="current-password" style="width:100%">
+          <label class="small dim" style="display:block;margin:8px 0 3px">new password (min 10 chars)</label>
+          <input id="pw-new" type="password" autocomplete="new-password" style="width:100%">
+          <label class="small dim" style="display:block;margin:8px 0 3px">repeat new password</label>
+          <input id="pw-new2" type="password" autocomplete="new-password" style="width:100%">
+          <div class="row" style="margin-top:12px">
+            <button class="pri" id="pw-go">change password</button>
+          </div></div>` : `<div class="card"><h3>Token auth</h3>
+          <p class="dim small">You are a clanker: you authenticate with your
+          agent token. Lost token? Ask an admin to re-issue an enrollment
+          code, then redeem it via your agent.</p></div>`}
+        <div class="card"><h3>About</h3>
+          <div class="small dim">SlopClanker v1 · your identity is your token;
+          every action is attributed and logged. Admins manage accounts under
+          Admin → Identities.</div></div>
+      </div></div>`;
+    $("#pr-save").onclick = async () => {
+      try {
+        await api("PUT", "/api/prefs/default_stack",
+          { value: $("#pr-stack").value });
+        await api("PUT", "/api/prefs/default_project",
+          { value: $("#pr-project").value });
+        await reload();
+        toast("landing preferences saved");
+      } catch (e) { toast(e.message, true); }
+    };
+    const pw = $("#pw-go");
+    if (pw) pw.onclick = async () => {
+      const cur = $("#pw-cur").value, n1 = $("#pw-new").value, n2 = $("#pw-new2").value;
+      if (n1 !== n2) return toast("new passwords do not match", true);
+      if (n1.length < 10) return toast("password must be at least 10 chars", true);
+      try {
+        await api("POST", "/api/auth/password", { current: cur, new: n1 });
+        $("#pw-cur").value = $("#pw-new").value = $("#pw-new2").value = "";
+        toast("password changed");
+      } catch (e) { toast(e.message, true); }
+    };
+  };
+  await reload();
+  return mark_refresh(reload);
+}
+ROUTES.push({ name: "settings", view: view_settings });
+
 /* ================= Identities (admin) ================= */
 async function view_identities() {
   tab_highlight("identities");
@@ -1457,38 +1548,56 @@ async function view_identities() {
           <button class="bad ghost" data-rejectreg="${r.id}">reject</button>
         </div>
       </div>`).join("");
-    const id_html = ids.map(i => {
-      const creds = (i.credentials || []).map(c => `
+    const creds_of = i => (i.credentials || []).map(c => `
         <div class="small mono">${esc(c.kind)}${c.label ? "·" + esc(c.label) : ""}
           · ${c.revoked_at ? "revoked" : "active"}
           ${c.last_seen_at ? "· seen " + ago(c.last_seen_at) : "· never seen"}
           ${c.last_ip ? "· " + esc(c.last_ip) : ""}
           · ${c.call_count} calls</div>`).join("");
-      return `<tr>
-        <td>${esc(i.name)}<div class="small dim">${esc(i.kind)} · ${esc(i.role || "—")}
-          · ${esc(i.status)}</div></td>
-        <td>${creds || '<span class="dim small">none</span>'}</td>
+    const humans = ids.filter(i => i.kind === "human");
+    const clankers = ids.filter(i => i.kind !== "human");
+    const user_html = humans.map(i => `<tr>
+        <td>${esc(i.name)}
+          ${i.role === "superadmin" ? '<span class="tag t-done">superadmin</span>' : ""}
+          <div class="small dim">${esc(i.status)} · created ${ago(i.created_at)}</div></td>
+        <td>${i.role !== "superadmin"
+          ? `<select data-role="${i.id}">
+              ${["user", "admin"].map(r =>
+                `<option value="${r}" ${i.role === r ? "selected" : ""}>${r}</option>`).join("")}
+            </select>`
+          : '<span class="dim small">fixed by design</span>'}</td>
+        <td>${i.id === ME.id
+          ? '<span class="dim small">you</span>'
+          : `<button class="ghost" data-resetpw="${i.id}">reset password…</button>`}</td>
+        <td>${i.status === "active" && i.id !== ME.id && i.role !== "superadmin"
+          ? `<button class="bad ghost" data-revoke="${i.id}">revoke</button>` : ""}
+        </td></tr>`).join("");
+    const clanker_html = clankers.map(i => `<tr>
+        <td>${esc(i.name)}<div class="small dim">${esc(i.kind)} · ${esc(i.status)}</div></td>
+        <td>${creds_of(i) || '<span class="dim small">none</span>'}</td>
         <td class="small dim">${i.reg_ip ? esc(i.reg_ip) : ""}
           ${i.reg_user_agent ? "<br>" + esc(i.reg_user_agent.slice(0, 60)) : ""}</td>
         <td class="small dim">${ago(i.created_at)}</td>
         <td class="row">
-          ${i.kind === "clanker" && i.status === "active"
-            ? `<button data-code="${i.id}">code</button>` : ""}
-          ${i.status === "active" && i.id !== ME.id
+          ${i.status === "active" ? `<button data-code="${i.id}">code</button>` : ""}
+          ${i.status === "active"
             ? `<button class="bad ghost" data-revoke="${i.id}">revoke</button>` : ""}
-        </td></tr>`;
-    }).join("");
+        </td></tr>`).join("");
     main.innerHTML = page_head({
-      type: "ADMIN", title: "Identities & enrollment",
-      meta: '<span class="dim">who is who; approve clankers and hand out enrollment codes</span>',
-      actions: `<button id="id-newuser">+ user</button>`,
+      type: "ADMIN", title: "People & enrollment",
+      meta: '<span class="dim">user accounts, clanker tokens and registration approvals</span>',
+      actions: `<button class="pri" id="id-newuser">+ user account</button>`,
     })
     + `<section class="card" style="margin:12px 0">
         <h3>Pending registrations (${regs.length})</h3>
         ${reg_html || '<p class="dim">none</p>'}
       </section>
+      <h3>User accounts</h3>
+      <table style="margin-bottom:18px"><thead><tr><th>account</th><th>role</th>
+        <th>password</th><th></th></tr></thead><tbody>${user_html}</tbody></table>
+      <h3>Clankers</h3>
       <table><thead><tr><th>identity</th><th>credentials</th><th>origin</th>
-        <th>created</th><th></th></tr></thead><tbody>${id_html}</tbody></table>`;
+        <th>created</th><th></th></tr></thead><tbody>${clanker_html}</tbody></table>`;
     $$("[data-approvereg]").forEach(b => b.onclick = async () => {
       try {
         const r = await api("POST", `/api/registrations/${b.dataset.approvereg}/approve`);
@@ -1523,13 +1632,29 @@ async function view_identities() {
       }
       catch (e) { toast(e.message, true); }
     });
-    $("#id-newuser").onclick = () => modal_form("New user", [
+    $$("[data-role]").forEach(sel => sel.onchange = async () => {
+      try {
+        await api("PATCH", `/api/identities/${sel.dataset.role}/role`,
+          { role: sel.value });
+        toast("role saved"); await reload();
+      } catch (e) { toast(e.message, true); await reload(); }
+    });
+    $$("[data-resetpw]").forEach(b => b.onclick = () => {
+      const iid = b.dataset.resetpw;
+      const who = (humans.find(h => h.id === parseInt(iid, 10)) || {}).name || "#" + iid;
+      modal_form(`Reset password — ${who}`, [
+        { id: "new", label: "new password (min 10 chars)", type: "password", required: true },
+      ], "reset", async v => {
+        await api("POST", `/api/identities/${iid}/password`, { new: v.new });
+        toast(`password reset for ${who}`);
+      });
+    });
+    $("#id-newuser").onclick = () => modal_form("New user account", [
       { id: "username", label: "username", required: true },
       { id: "password", label: "password", type: "password", required: true },
       { id: "role", label: "role", type: "select",
-        options: (ME.role === "superadmin"
-          ? ["user", "admin", "superadmin"] : ["user", "admin"]).map(x => [x, x]) },
-    ], "create", async v => { await api("POST", "/api/users", v); toast("created"); await reload(); });
+        options: ["user", "admin"].map(x => [x, x]) },
+    ], "create", async v => { await api("POST", "/api/users", v); toast("account created"); await reload(); });
   };
   await reload();
   await load_directory();

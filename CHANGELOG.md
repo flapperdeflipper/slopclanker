@@ -2,6 +2,21 @@
 All notable changes to this project will be documented in this file.
 
 
+## [1.2.0] — 2026-09-07
+
+- **Accounts & preferences (feedback round 2).**
+  - **Settings page** (`#/settings`, everyone): landing preferences —
+    default stack AND default project (project wins), saved per
+    identity; the frontpage and post-login landing honor them.
+  - **Change your own password** (`POST /api/auth/password`, current
+    password required; clankers get token guidance instead).
+  - **Admin → People & enrollment**: user accounts listed separately
+    from clankers; **+ user account** with role; **inline role
+    changes** (user ↔ admin, `PATCH /api/identities/{id}/role`);
+    **reset password** (`POST /api/identities/{id}/password`). The
+    superadmin role is fixed by design (single-superadmin schema) and
+    the UI says so instead of offering an option that would 422.
+
 ## [1.1.0] — 2026-09-07
 
 - **UI overhaul — human-first IA (feedback round 1).** The agents use

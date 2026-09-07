@@ -132,6 +132,85 @@ class AuthError(ValueError):
     """Login or account failure."""
 
 
+def _password_credential(conn, identity_id):
+    return conn.execute(
+        "SELECT * FROM credentials"
+        " WHERE identity_id = ? AND kind = 'password'"
+        " AND revoked_at IS NULL",
+        (identity_id,),
+    ).fetchone()
+
+
+def change_password(conn, identity: dict, current: str, new: str) -> None:
+    """Change own password: current must match; strength rules apply."""
+    cred = _password_credential(conn, identity["id"])
+    if cred is None:
+        raise AuthError("this account has no password (clanker token auth)")
+    if not setup.verify_password(cred["secret_hash"], current or ""):
+        raise AuthError("current password is wrong")
+    if not isinstance(new, str) or len(new) < setup.MIN_PASSWORD_LEN:
+        raise setup.WeakPassword(
+            f"password must be at least {setup.MIN_PASSWORD_LEN} chars"
+        )
+    with conn:
+        conn.execute(
+            "UPDATE credentials SET secret_hash = ? WHERE id = ?",
+            (setup.hash_password(new), cred["id"]),
+        )
+
+
+def reset_password(conn, actor, identity_id: int, new: str) -> None:
+    """Admin resets a human account's password."""
+    target = conn.execute(
+        "SELECT * FROM identities WHERE id = ?", (identity_id,)
+    ).fetchone()
+    if target is None or target["kind"] != "human":
+        raise AuthError("no such human account")
+    if target["role"] == "superadmin" and actor["role"] != "superadmin":
+        raise AuthError("only a superadmin may reset a superadmin")
+    cred = _password_credential(conn, identity_id)
+    if cred is None:
+        raise AuthError("this account has no password credential")
+    if not isinstance(new, str) or len(new) < setup.MIN_PASSWORD_LEN:
+        raise setup.WeakPassword(
+            f"password must be at least {setup.MIN_PASSWORD_LEN} chars"
+        )
+    with conn:
+        conn.execute(
+            "UPDATE credentials SET secret_hash = ? WHERE id = ?",
+            (setup.hash_password(new), cred["id"]),
+        )
+
+
+def set_role(conn, actor, identity_id: int, role: str) -> dict:
+    """Change a human account's role (user|admin|superadmin).
+
+    Only a superadmin may grant or revoke superadmin; the last active
+    superadmin cannot be demoted.
+    """
+    if role not in ("user", "admin", "superadmin"):
+        raise AuthError("role must be user, admin or superadmin")
+    target = conn.execute(
+        "SELECT * FROM identities WHERE id = ?", (identity_id,)
+    ).fetchone()
+    if target is None or target["kind"] != "human":
+        raise AuthError("no such human account")
+    # The schema enforces exactly one superadmin (partial unique index):
+    # the role moves only with the account, never by assignment.
+    if role == "superadmin":
+        raise AuthError("this instance has exactly one superadmin")
+    if target["role"] == "superadmin":
+        raise AuthError("the superadmin role cannot be changed")
+    with conn:
+        conn.execute("UPDATE identities SET role = ? WHERE id = ?", (role, identity_id))
+    return dict(
+        conn.execute(
+            "SELECT id, name, kind, role, status FROM identities WHERE id = ?",
+            (identity_id,),
+        ).fetchone()
+    )
+
+
 def create_human(
     conn: sqlite3.Connection,
     username: str,
