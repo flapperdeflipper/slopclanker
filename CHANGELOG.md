@@ -2,6 +2,36 @@
 All notable changes to this project will be documented in this file.
 
 
+## [1.1.0] — 2026-09-07
+
+- **UI overhaul — human-first IA (feedback round 1).** The agents use
+  MCP; the web UI is for humans, and now it reads that way.
+  - Global fix: every mutation re-renders (the load/render split let 38
+    call sites skip rendering — creates needed a hard refresh).
+    Views now expose a single reload(); the shell selectors and the
+    Attention badge refresh on the SSE cadence too.
+  - Shell: stack → project selectors in the header (with "+ new…"),
+    configurable **default stack** for humans (per-identity prefs,
+    `GET /api/prefs`, `PUT /api/prefs/{key}`), landing on your stack's
+    board after login.
+  - Landscape is gone: human queues live on **Attention** (approve /
+    review / questions / registrations, badge in the nav); structure
+    lives on **Organize**; **Identities** is demoted to Admin.
+  - Project pages are tabbed (Board / Discussions / Notes / Decisions,
+  GitHub-style) instead of one dense wall.
+  - Board: Trello-style grid, one column per state with counts; cards
+    show priority, tags, frozen/waived markers, assignee, age.
+  - Task page: TASK type label, big status chip, a **state stepper**
+    (idea → … → done), breadcrumb, labeled transitions ("flesh out
+    plan", "request review", "mark done"), move-sidebar, friendly
+    empty states. New tasks land visibly in the idea column.
+  - New-task form: big auto-growing title field; real **tag chip
+    selector** with suggestions (`GET /api/tags`) and create-in-place;
+    assignee picker by name.
+  - `PATCH /api/stacks/{id}` (admins) — stacks are finally editable.
+  - Schema: `prefs` table; existing databases gain it automatically on
+  boot (bootstrap re-applies the idempotent schema).
+
 ## [1.0.1] — 2026-09-06
 
 - **Cutover fix: schema marker collision with legacy 0.x.** The legacy

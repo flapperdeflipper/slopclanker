@@ -37,6 +37,7 @@ from app import (
     knowledge,
     links,
     objects,
+    prefs,
     proofs,
     questions,
     ratelimit,
@@ -424,6 +425,71 @@ async def api_identities_directory(request: Request) -> JSONResponse:
     return JSONResponse([dict(r) for r in rows])
 
 
+@mcp.custom_route("/api/prefs", methods=["GET"])
+async def api_prefs_get(request: Request) -> JSONResponse:
+    """Own UI preferences as an object (e.g. default_stack)."""
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        return JSONResponse(prefs.get_all(conn, actor["id"]))
+    finally:
+        conn.close()
+
+
+@mcp.custom_route("/api/prefs/{key}", methods=["PUT"])
+async def api_prefs_put(request: Request) -> JSONResponse:
+    """Upsert one own preference. Values are short strings; no secrets."""
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+        prefs.set(
+            conn := _db(),
+            actor["id"],
+            request.path_params["key"],
+            str(body.get("value", "")),
+        )
+    except ValueError:
+        return JSONResponse({"error": "bad key"}, status_code=422)
+    except Exception:
+        return JSONResponse({"error": "bad body"}, status_code=422)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return JSONResponse({"ok": True})
+
+
+@mcp.custom_route("/api/tags", methods=["GET"])
+async def api_tags(request: Request) -> JSONResponse:
+    """Distinct task tags for the chip selector (optional project filter)."""
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    q = "SELECT tags FROM tasks WHERE tags IS NOT NULL AND tags != ''"
+    args: list = []
+    proj = request.query_params.get("project")
+    if proj:
+        q += " AND project_id = ?"
+        args.append(int(proj))
+    conn = _db()
+    try:
+        rows = conn.execute(q + " LIMIT 2000", args).fetchall()
+    finally:
+        conn.close()
+    seen: dict = {}
+    for r in rows:
+        for tag in str(r["tags"]).split(","):
+            tag = tag.strip()
+            if tag:
+                seen[tag] = True
+    return JSONResponse({"tags": sorted(seen.keys())[:200]})
+
+
 @mcp.custom_route("/api/identities", methods=["GET"])
 async def api_identities(request: Request) -> JSONResponse:
     actor = _actor(request)
@@ -609,6 +675,34 @@ async def api_stacks_list(request: Request) -> JSONResponse:
     finally:
         conn.close()
     return JSONResponse([dict(r) for r in rows])
+
+
+@mcp.custom_route("/api/stacks/{sid}", methods=["PATCH"])
+async def api_stack_edit(request: Request) -> JSONResponse:
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad body"}, status_code=422)
+    conn = _db()
+    try:
+        objects.edit_stack(
+            conn,
+            actor,
+            int(request.path_params["sid"]),
+            name=body.get("name"),
+            description=body.get("description"),
+        )
+        row = conn.execute(
+            "SELECT * FROM stacks WHERE id = ?", (int(request.path_params["sid"]),)
+        ).fetchone()
+        return JSONResponse(dict(row))
+    except objects.ObjectError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    finally:
+        conn.close()
 
 
 @mcp.custom_route("/api/stacks", methods=["POST"])

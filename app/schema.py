@@ -484,4 +484,13 @@ CREATE INDEX IF NOT EXISTS idx_creds_identity    ON credentials(identity_id, kin
 CREATE INDEX IF NOT EXISTS idx_notif_unread      ON notifications(identity_id, read_at);
 CREATE INDEX IF NOT EXISTS idx_projects_stack    ON projects(stack_id);
 CREATE INDEX IF NOT EXISTS idx_registrations_st  ON registrations(status);
+
+-- per-identity UI preferences (e.g. default stack for humans)
+CREATE TABLE IF NOT EXISTS prefs(
+    identity_id INTEGER NOT NULL REFERENCES identities(id),
+    key         TEXT NOT NULL,
+    value       TEXT,
+    updated_at  REAL NOT NULL,
+    PRIMARY KEY(identity_id, key)
+);
 """
