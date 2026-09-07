@@ -568,6 +568,85 @@ async def api_identity_code(request: Request) -> JSONResponse:
     return JSONResponse({"code": code, "expires_at": expires}, status_code=201)
 
 
+@mcp.custom_route("/api/auth/password", methods=["POST"])
+async def api_password_change(request: Request) -> JSONResponse:
+    """Change own password (current must match)."""
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad body"}, status_code=422)
+    conn = _db()
+    try:
+        try:
+            auth.change_password(
+                conn, dict(actor), body.get("current", ""), body.get("new", "")
+            )
+        except (auth.AuthError, setup.SetupError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+    finally:
+        conn.close()
+    return JSONResponse({"ok": True})
+
+
+@mcp.custom_route("/api/identities/{iid:int}/password", methods=["POST"])
+async def api_password_reset(request: Request) -> JSONResponse:
+    """Admin resets a human account's password."""
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    if not perms.can(actor, perms.CREATE_USER):
+        return JSONResponse({"error": "not allowed"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad body"}, status_code=422)
+    conn = _db()
+    try:
+        try:
+            auth.reset_password(
+                conn,
+                dict(actor),
+                int(request.path_params["iid"]),
+                body.get("new", ""),
+            )
+        except (auth.AuthError, setup.SetupError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+    finally:
+        conn.close()
+    return JSONResponse({"ok": True})
+
+
+@mcp.custom_route("/api/identities/{iid:int}/role", methods=["PATCH"])
+async def api_role_set(request: Request) -> JSONResponse:
+    """Change a human account's role (superadmin rules enforced)."""
+    actor, err = _require_actor(request)
+    if err:
+        return err
+    if not perms.can(actor, perms.CREATE_USER):
+        return JSONResponse({"error": "not allowed"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad body"}, status_code=422)
+    conn = _db()
+    try:
+        try:
+            row = auth.set_role(
+                conn,
+                dict(actor),
+                int(request.path_params["iid"]),
+                str(body.get("role", "")),
+            )
+        except auth.AuthError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+    finally:
+        conn.close()
+    return JSONResponse(row)
+
+
 @mcp.custom_route("/api/users", methods=["POST"])
 async def api_users_create(request: Request) -> JSONResponse:
     actor = _actor(request)
