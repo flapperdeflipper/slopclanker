@@ -16,9 +16,15 @@ Current surface (phases 1-2):
   - `POST /api/auth/enroll` `{code}` — redeem a one-time enrollment code
   - `POST /api/auth/reenroll` `{name}` — key-loss: notifies admins
 - Humans: `POST /api/auth/login`, `GET /api/auth/whoami`,
-  `POST /api/auth/logout` (bearer = 12h UI session)
+  `POST /api/auth/logout` (bearer = 12h UI session),
+  `POST /api/auth/password` `{current, new}` — change own password
+- Preferences (bearer, own only): `GET /api/prefs`,
+  `PUT /api/prefs/{key}` `{value}` — short string values per identity
+  (UI uses `default_stack`, `default_project`; project wins at landing)
+- `GET /api/tags?project=` — distinct task tags for chip suggestions
 - Workflow (bearer, any active identity):
-  - `GET/POST /api/stacks` (create: admins)
+  - `GET/POST /api/stacks` (create: admins), `PATCH /api/stacks/{id}`
+    (edit: admins — name/description)
   - `GET/POST /api/projects`, `GET/PATCH /api/projects/{id}`,
     `POST /api/projects/{id}/archive|unarchive|adopt|purge`
   - `GET/POST /api/tasks?project&state&assignee`,
@@ -85,8 +91,10 @@ Current surface (phases 1-2):
   `GET /api/registrations`,
   `POST /api/registrations/{id}/approve|reject`, `GET /api/identities`,
   `POST /api/identities/{id}/revoke`, `POST /api/identities/{id}/code`,
-  `POST /api/users`, `GET /api/notifications`,
-  `POST /api/notifications/{id}/read`
+  `POST /api/identities/{id}/password` `{new}` (reset),
+  `PATCH /api/identities/{id}/role` `{role}` (user|admin; the single
+  superadmin role is immutable by schema), `POST /api/users`,
+  `GET /api/notifications`, `POST /api/notifications/{id}/read`
 - `/mcp` — MCP endpoint (tools arrive with later phases)
 - `/` — placeholder UI (setup wizard only)
 
