@@ -18,6 +18,9 @@ def ensure(db_file: str | Path) -> Path:
     path = Path(db_file)
     path.parent.mkdir(parents=True, exist_ok=True)
     if db.is_v2(path):
+        # Existing v2 database: re-run the (idempotent) schema so additive
+        # tables/indexes from newer releases appear without a version bump.
+        db.init_db(path)
         return path
     if path.exists():
         target = _free_legacy_path(path.parent)

@@ -108,6 +108,26 @@ def create_stack(
     return cur.lastrowid
 
 
+def edit_stack(conn, actor, stack_id: int, *, name=None, description=None) -> None:
+    _require(perms.can(actor, perms.STACKS_MANAGE), ObjectError("admins only"))
+    row = conn.execute("SELECT * FROM stacks WHERE id = ?", (stack_id,)).fetchone()
+    _require(row is not None, ObjectError("no such stack"))
+    sets, args = [], []
+    if name is not None:
+        sets.append("name = ?")
+        args.append(_check_name(name))
+    if description is not None:
+        sets.append("description = ?")
+        args.append(_check_text(description))
+    if sets:
+        with conn:
+            conn.execute(
+                f"UPDATE stacks SET {', '.join(sets)} WHERE id = ?",  # noqa: S608 - column whitelist
+                (*args, stack_id),
+            )
+    events.emit(conn, actor["id"], "stack.edited", "stack", stack_id)
+
+
 def list_stacks(conn) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM stacks ORDER BY name").fetchall()
 
