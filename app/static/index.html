@@ -88,18 +88,57 @@ margin-bottom:14px;flex-wrap:wrap}
 .tabs a{padding:8px 14px;color:var(--dim);border-bottom:2px solid transparent;margin-bottom:-1px}
 .tabs a.on{color:var(--fg);border-bottom-color:var(--acc);font-weight:600}
 .tabs .cnt{background:var(--pan3);border-radius:9px;padding:0 7px;font-size:11px;margin-left:5px}
-/* kanban */
-.board{display:flex;gap:10px;overflow-x:auto;padding-bottom:10px;align-items:flex-start}
-.kcol{min-width:210px;max-width:280px;flex:1 0 210px;background:var(--pan);
-border:1px solid var(--line);border-radius:10px;padding:8px}
-.kcol h4{margin:0 0 8px;font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;
-display:flex;justify-content:space-between;align-items:center}
+/* board toolbar */
+.btool{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin:0 0 12px}
+.btool .sp{flex:1}
+.bsearch{min-width:130px;max-width:220px;padding:4px 10px;border-radius:15px}
+.tgl{padding:3px 11px;border-radius:14px;font-size:12.5px}
+.tgl[aria-pressed="true"]{background:var(--acc);color:#08222f;border-color:var(--acc);font-weight:600}
+.bsel{padding:3px 8px;font-size:12.5px;max-width:180px}
+.btagdrop summary{list-style:none}
+.btagdrop summary::-webkit-details-marker{display:none}
+.btagmenu{position:absolute;top:100%;left:0;z-index:15;background:var(--pan);border:1px solid var(--line2);
+border-radius:8px;padding:8px 10px;min-width:170px;max-height:260px;overflow:auto;margin-top:4px;
+box-shadow:0 6px 22px rgba(0,0,0,.4)}
+.btagmenu label{display:flex;gap:7px;align-items:center;margin:3px 0;font-size:13px;color:var(--fg)}
+/* board */
+.boardwide main{max-width:1720px}
+.boardpage{display:flex;flex-direction:column;min-height:0;height:calc(100dvh - 236px);min-height:400px}
+.board{display:grid;gap:10px;flex:1;min-height:0;align-items:stretch}
+.kcol{display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--pan);
+border:1px solid var(--line);border-radius:10px}
+.kcol h4{margin:0;padding:8px 10px 6px;font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;
+display:flex;justify-content:space-between;align-items:center;gap:6px;border-bottom:1px solid var(--line)}
+.kcol h4.xp{cursor:pointer}
+.kcol h4.xp:hover{color:var(--acc)}
 .kcol .cnt{background:var(--pan3);border-radius:9px;padding:0 7px;font-size:11px}
-.kcard{background:var(--pan2);border:1px solid transparent;border-radius:8px;padding:8px 10px;
-margin-bottom:7px;cursor:pointer}
+.kcards{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:8px;
+scrollbar-width:thin;mask-image:linear-gradient(180deg,#000 90%,transparent 99%);
+-webkit-mask-image:linear-gradient(180deg,#000 90%,transparent 99%)}
+.ksub{margin:9px 2px 5px;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}
+.kmore{margin:2px 0 4px;padding:4px;width:100%}
+.kcard{position:relative;display:block;width:100%;text-align:left;background:var(--pan2);
+border:1px solid transparent;border-radius:8px;padding:8px 26px 8px 10px;margin-bottom:7px;
+cursor:pointer;font:inherit;color:var(--fg)}
 .kcard:hover{border-color:var(--acc)}
+.kcard:focus-visible{outline:2px solid var(--acc)}
 .kcard .kt{font-weight:600;line-height:1.35;margin-bottom:5px;word-break:break-word}
 .kcard .kmeta{display:flex;gap:5px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--dim)}
+.kcard.paused{opacity:.55}
+.kadv{position:absolute;top:5px;right:4px;width:26px;height:26px;border:0;background:transparent;
+color:var(--dim);border-radius:6px;cursor:pointer;padding:0;font-size:15px;line-height:1}
+.kadv:hover{background:var(--pan3);color:var(--acc)}
+.kproj{max-width:9em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.board.compact .kmeta{display:none}
+.board.compact .kt{margin-bottom:1px}
+@media (hover:hover){.kadv{opacity:0}.kcard:hover .kadv,.kcard:focus-within .kadv{opacity:1}}
+@media (max-width:767px){
+.boardpage{height:auto;min-height:0}
+.board{grid-template-columns:1fr !important}
+.kcol{max-height:none}
+.kcards{overflow:visible;mask-image:none;-webkit-mask-image:none;padding:6px}
+.kadv{opacity:1}
+}
 .avatar{display:inline-flex;width:19px;height:19px;border-radius:50%;background:var(--pan3);
 align-items:center;justify-content:center;font-size:9.5px;font-weight:700;color:var(--fg)}
 /* state stepper */
@@ -264,6 +303,7 @@ async function sse_poll_fallback() {
 const ROUTES = [];
 function route() {
   const h = location.hash || "#/";
+  document.body.classList.remove("boardwide");
   if (!TOKEN) return render_auth();
   const parts = h.slice(2).split("/");
   const name = parts[0] || "home";
@@ -384,7 +424,8 @@ function shell_render_selectors() {
     opt += `<optgroup label="No stack">${groups[0].map(p =>
       `<option value="${p.id}" ${proj && proj.id === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</optgroup>`;
   const none = !opt;
-  psel.innerHTML = (none ? '<option value="" selected>no projects yet</option>' : opt)
+  psel.innerHTML = (none ? '<option value="" selected>no projects yet</option>'
+    : '<option value="__all">– all projects · board –</option>' + opt)
     + '<option value="__new">+ new project…</option>';
   ssel.style.display = ""; psel.style.display = "";
   if (proj && proj.stack_id) {
@@ -403,6 +444,11 @@ function shell_bind_selectors() {
     if (first) location.hash = `#/project/${first.id}/board`;
   };
   $("#sel-project").onchange = async e => {
+    if (e.target.value === "__all") {
+      const sid = parseInt($("#sel-stack").value, 10);
+      if (sid) { location.hash = `#/stack/${sid}/board`; return; }
+      e.target.value = ""; return;
+    }
     if (e.target.value === "__new") {
       const cur = current_project_id();
       const proj = SHELL.projects.find(p => p.id === cur);
@@ -850,6 +896,246 @@ async function view_attention() {
 }
 ROUTES.push({ name: "attention", view: view_attention });
 
+/* ---- responsive board engine (shared by project + stack boards) ---- */
+const FLOW_GROUPS = [
+  { id: "backlog", label: "Backlog", states: ["idea", "plan"] },
+  { id: "proposed", label: "Proposed", states: ["proposed"] },
+  { id: "active", label: "In progress", states: ["approved", "building"] },
+  { id: "review", label: "Review", states: ["review"] },
+  { id: "done", label: "Done", states: ["done"] },
+];
+const FLOW3 = [
+  { id: "next", label: "Up next", states: ["idea", "plan", "proposed"] },
+  { id: "flight", label: "In flight", states: ["approved", "building", "review"] },
+  { id: "landed", label: "Landed", states: ["done"] },
+];
+const BOARD = { ctx: null, filters: null, xgrp: new Set() };
+const board_bucket = () => innerWidth >= 1200 ? "wide" : innerWidth >= 768 ? "mid" : "narrow";
+function board_lanes(mode) {
+  const b = board_bucket();
+  if (mode === "all" && b === "wide")
+    return STATES.filter(x => x !== "trashed").map(x => ({ id: x, label: x, states: [x] }));
+  return b === "wide" ? FLOW_GROUPS : FLOW3;
+}
+function board_parse_q() {
+  const f = { q: "", tags: [], me: false, hidedone: false, paused: false, alldone: false, project: "" };
+  const hi = location.hash.indexOf("?");
+  if (hi < 0) return f;
+  for (const [k, v] of new URLSearchParams(location.hash.slice(hi + 1))) {
+    if (k === "q") f.q = v;
+    else if (k === "tag") f.tags = v ? v.split(",").filter(Boolean) : [];
+    else if (k === "me") f.me = v === "1";
+    else if (k === "hidedone") f.hidedone = v === "1";
+    else if (k === "paused") f.paused = v === "1";
+    else if (k === "alldone") f.alldone = v === "1";
+    else if (k === "p") f.project = v;
+  }
+  return f;
+}
+function board_sync_q() {
+  const f = BOARD.filters, p = new URLSearchParams();
+  if (f.q) p.set("q", f.q);
+  if (f.tags.length) p.set("tag", f.tags.join(","));
+  if (f.me) p.set("me", "1");
+  if (f.hidedone) p.set("hidedone", "1");
+  if (f.paused) p.set("paused", "1");
+  if (f.alldone) p.set("alldone", "1");
+  if (f.project) p.set("p", f.project);
+  const qs = p.toString();
+  history.replaceState(null, "",
+    location.pathname + location.hash.split("?")[0] + (qs ? "?" + qs : ""));
+}
+function board_filtered() {
+  const f = BOARD.filters, ctx = BOARD.ctx;
+  let out = ctx.tasks.filter(t => t.state !== "trashed");
+  if (f.hidedone) out = out.filter(t => t.state !== "done");
+  if (f.paused) out = out.filter(t => t.state === "paused");
+  if (f.me && ME) out = out.filter(t => t.assignee_id === ME.id);
+  if (f.project) out = out.filter(t => String(t.project_id) === String(f.project));
+  if (f.q) {
+    const q = f.q.toLowerCase();
+    out = out.filter(t => (t.title || "").toLowerCase().includes(q)
+      || (t.tags || "").toLowerCase().includes(q));
+  }
+  if (f.tags.length) out = out.filter(t => f.tags.every(tag =>
+    (t.tags || "").split(",").map(x => x.trim()).includes(tag)));
+  return out;
+}
+function board_card(t, ctx, chip) {
+  const tags = (t.tags || "").split(",").map(x => x.trim()).filter(Boolean).slice(0, 2);
+  return `<div class="kcard${t.state === "paused" ? " paused" : ""}" data-task="${t.id}"
+    role="button" tabindex="0" aria-label="${esc(t.title)} (${esc(t.state)})">
+    <button class="kadv" data-adv="${t.id}" title="move task…">\u2192</button>
+    <div class="kt">${esc(t.title)}</div>
+    <div class="kmeta">
+      ${chip ? state_chip(t.state) : ""}
+      ${t.priority === "high" || t.priority === "urgent"
+        ? `<span class="tag t-${esc(t.priority)}">${esc(t.priority)}</span>` : ""}
+      ${ctx.frozen.has(t.id) ? '<span class="tag t-proposed" title="has open question">\u2744</span>' : ""}
+      ${t.proof_waived ? '<span class="tag t-done">waived</span>' : ""}
+      ${tags.map(tg => `<span>${esc(tg)}</span>`).join("")}
+      <span style="flex:1"></span>
+      ${ctx.stack_mode
+        ? `<span class="kproj" title="${esc(t.project_name || "")}">${esc(t.project_name || "")}</span>` : ""}
+      ${t.assignee_id ? avatar(t.assignee_id, IDNAME[t.assignee_id]) : ""}
+      <span>${ago(t.state_changed_at)}</span>
+    </div></div>`;
+}
+function board_col(lane, cards, ctx, chip, expandable) {
+  let inner = "", more = "";
+  if (expandable && BOARD.xgrp.has(lane.id)) {
+    for (const st of lane.states) {
+      const sc = cards.filter(t => t.state === st);
+      inner += `<div class="ksub">${esc(st)} \u00b7 ${sc.length}</div>`
+        + (sc.map(t => board_card(t, ctx, false)).join("")
+          || '<div class="dim small" style="padding:2px">\u2014</div>');
+    }
+  } else {
+    let shown = cards;
+    if (lane.id === "done" && !BOARD.filters.alldone && cards.length > 10) {
+      shown = cards.slice(-10);
+      more = `<button class="kmore ghost small" data-more="1">show ${cards.length - shown.length} earlier</button>`;
+    }
+    inner = shown.map(t => board_card(t, ctx, chip)).join("")
+      || '<div class="dim small" style="padding:4px 2px">\u2014</div>';
+  }
+  return `<section class="kcol" aria-label="${esc(lane.label)}, ${cards.length} tasks">
+    <h4 class="${expandable ? "xp" : ""}" ${expandable ? `data-xgrp="${lane.id}" title="expand sub-lanes"` : ""}>
+      <span>${esc(lane.label)}</span><span class="cnt">${cards.length}</span></h4>
+    <div class="kcards">${inner}${more}</div></section>`;
+}
+function board_toolbar(ctx) {
+  const f = BOARD.filters, wide = board_bucket() === "wide";
+  const mode = SHELL.prefs.board_lanes === "all" ? "all" : "flow";
+  const dens = SHELL.prefs.board_density === "compact" ? "compact" : "comfy";
+  return `<div class="btool">
+    <input id="bq" class="bsearch" type="search" placeholder="filter tasks\u2026"
+      value="${esc(f.q)}" aria-label="filter tasks">
+    ${ctx.all_tags.length ? `<details class="btagdrop"><summary class="tgl">tags${f.tags.length ? " \u00b7 " + f.tags.length : ""}</summary>
+      <div class="btagmenu">${ctx.all_tags.map(t =>
+        `<label><input type="checkbox" class="btag" value="${esc(t)}" ${f.tags.includes(t) ? "checked" : ""}> ${esc(t)}</label>`).join("")}
+      </div></details>` : ""}
+    <button class="tgl" id="bme" aria-pressed="${f.me}" title="only my tasks">mine</button>
+    ${ctx.has_paused ? `<button class="tgl" id="bpause" aria-pressed="${f.paused}" title="only paused tasks">\u23f8 paused</button>` : ""}
+    <button class="tgl" id="bdone" aria-pressed="${f.hidedone}" title="hide done">hide done</button>
+    ${ctx.stack_mode && ctx.projects.length > 1 ? `<select class="bsel" id="bproj" aria-label="project filter">
+      <option value="">all projects</option>
+      ${ctx.projects.map(pr => `<option value="${pr.id}" ${String(f.project) === String(pr.id) ? "selected" : ""}>${esc(pr.name)}</option>`).join("")}
+    </select>` : ""}
+    <span class="sp"></span>
+    ${wide ? `<button class="tgl" id="blanes" title="lane grouping">lanes: ${mode === "all" ? "all" : "flow"}</button>` : ""}
+    <button class="tgl" id="bdens" title="card density">${dens === "compact" ? "compact" : "comfortable"}</button>
+  </div>`;
+}
+function board_grid(ctx) {
+  const mode = SHELL.prefs.board_lanes === "all" ? "all" : "flow";
+  const lanes = board_lanes(mode).slice(); /* never mutate the shared presets */
+  const tasks = board_filtered();
+  if (mode === "flow" && tasks.some(t => t.state === "paused"))
+    lanes.push({ id: "paused", label: "Paused", states: ["paused"] });
+  const chip = lanes.some(l => l.states.length > 1);
+  const grid = board_bucket() === "narrow" ? "1fr" : `repeat(${lanes.length}, minmax(0, 1fr))`;
+  const cls = `board${SHELL.prefs.board_density === "compact" ? " compact" : ""}`;
+  if (!tasks.length && !ctx.tasks.some(t => t.state !== "trashed"))
+    return "";
+  return `<div class="${cls}" style="grid-template-columns:${grid}">`
+    + lanes.map(l => board_col(l, tasks.filter(t => l.states.includes(t.state)), ctx, chip,
+      l.states.length > 1)).join("") + `</div>`;
+}
+function open_advance(t) {
+  const is_human = ME && ME.kind === "human";
+  const opts = (NEXT[t.state] || []).filter(x => is_human || !HUMAN_ONLY(x));
+  if (!opts.length) return toast("no moves available from " + t.state, true);
+  modal_form(`Move \u201c${esc(t.title.slice(0, 42))}${t.title.length > 42 ? "\u2026" : ""}\u201d`, [
+    { id: "to", label: "move to", type: "select",
+      options: opts.map(x => [x, TRANSITION_LABEL[x] || x]) },
+    { id: "note", label: HUMAN_NOTE("x"), type: "textarea" },
+  ], "move", async v => {
+    await api("POST", `/api/tasks/${t.id}/transition`,
+      { to: v.to, note: v.note, version: t.version });
+    toast("\u2192 " + v.to);
+    await BOARD.ctx.reload();
+  });
+}
+function board_bind_grid(ctx) {
+  const grid = $("#bgrid");
+  $$("[data-task]", grid).forEach(el => {
+    el.onclick = e => { if (e.target.closest(".kadv")) return; location.hash = "#/task/" + el.dataset.task; };
+    el.onkeydown = e => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      if (e.target.closest(".kadv")) return;
+      location.hash = "#/task/" + el.dataset.task;
+    };
+  });
+  $$("[data-adv]", grid).forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const t = ctx.tasks.find(x => x.id === parseInt(b.dataset.adv, 10));
+    if (t) open_advance(t);
+  });
+  $$("[data-more]", grid).forEach(b => b.onclick = () => {
+    BOARD.filters.alldone = true; board_sync_q(); board_paint();
+  });
+  $$("[data-xgrp]", grid).forEach(h => h.onclick = () => {
+    const id = h.dataset.xgrp;
+    BOARD.xgrp.has(id) ? BOARD.xgrp.delete(id) : BOARD.xgrp.add(id);
+    board_paint();
+  });
+}
+function board_bind_toolbar(ctx) {
+  const wrap = $("#boardwrap");
+  const f = BOARD.filters;
+  const bq = $("#bq");
+  if (bq) bq.oninput = () => { f.q = bq.value; board_sync_q(); board_repaint_grid(); };
+  $$(".btag", wrap).forEach(cb => cb.onchange = () => {
+    f.tags = $$(".btag", wrap).filter(x => x.checked).map(x => x.value);
+    const sum = cb.closest("details").querySelector("summary");
+    if (sum) sum.textContent = "tags" + (f.tags.length ? " \u00b7 " + f.tags.length : "");
+    board_sync_q(); board_repaint_grid();
+  });
+  const tog = (id, key) => { const b = $(id); if (b) b.onclick = () => {
+    f[key] = !f[key]; b.setAttribute("aria-pressed", String(f[key]));
+    board_sync_q(); board_repaint_grid(); }; };
+  tog("#bme", "me"); tog("#bpause", "paused"); tog("#bdone", "hidedone");
+  const bproj = $("#bproj");
+  if (bproj) bproj.onchange = () => { f.project = bproj.value; board_sync_q(); board_repaint_grid(); };
+  const bl = $("#blanes");
+  if (bl) bl.onclick = async () => {
+    const mode = SHELL.prefs.board_lanes === "all" ? "flow" : "all";
+    SHELL.prefs.board_lanes = mode;
+    try { await api("PUT", "/api/prefs/board_lanes", { value: mode }); } catch { }
+    board_paint();
+  };
+  const bd = $("#bdens");
+  if (bd) bd.onclick = async () => {
+    const d = SHELL.prefs.board_density === "compact" ? "comfy" : "compact";
+    SHELL.prefs.board_density = d;
+    try { await api("PUT", "/api/prefs/board_density", { value: d }); } catch { }
+    board_paint();
+  };
+}
+function board_repaint_grid() {
+  const ctx = BOARD.ctx;
+  const g = $("#bgrid");
+  if (!ctx || !g) return;
+  g.outerHTML = `<div id="bgrid">${board_grid(ctx)}</div>`;
+  board_bind_grid(ctx);
+}
+function board_paint() {
+  const ctx = BOARD.ctx;
+  if (!ctx || !$("#boardwrap")) return;
+  $("#boardwrap").innerHTML = board_toolbar(ctx)
+    + `<div id="bgrid">${board_grid(ctx) || `<div class="card"><div class="empty">
+      <div class="big">No tasks yet</div>open a project and add the first one</div></div>`}</div>`;
+  board_bind_toolbar(ctx);
+  board_bind_grid(ctx);
+}
+let board_rs;
+addEventListener("resize", () => {
+  clearTimeout(board_rs);
+  board_rs = setTimeout(() => { if (BOARD.ctx && $("#boardwrap")) board_paint(); }, 150);
+});
+
 /* ================= Project (tabbed) ================= */
 const PROJECT_TABS = [["board", "Board"], ["discussions", "Discussions"],
                       ["notes", "Notes"], ["decisions", "Decisions"]];
@@ -899,7 +1185,7 @@ async function view_project(parts) {
         ${cnt !== "" ? `<span class="cnt">${cnt}</span>` : ""}</a>`;
     }).join("") + `</div>`;
     let body = "";
-    if (tab === "board") body = board_html(data, qs);
+    if (tab === "board") body = board_html();
     if (tab === "discussions") body = tab_discussions(discs, pid);
     if (tab === "notes") body = tab_notes(notes || [], pid);
     if (tab === "decisions") body = tab_decisions(decs, pid);
@@ -914,34 +1200,22 @@ async function view_project(parts) {
           </div>`).join("")}</div>` : ""}`;
     bind_project(pid, p, tags.tags || []);
     shell_render_selectors();
+    document.body.classList.toggle("boardwide", tab === "board");
+    if (tab === "board") {
+      BOARD.filters = board_parse_q();
+      BOARD.ctx = {
+        tasks: data.tasks,
+        frozen: new Set(qs.filter(q => q.attach_type === "task")
+          .map(q => parseInt(q.attach_id, 10))),
+        all_tags: tags.tags || [],
+        stack_mode: false,
+        has_paused: data.tasks.some(t => t.state === "paused"),
+        reload,
+      };
+      board_paint();
+    }
   };
-  const board_html = (data, qs) => {
-    const open_q_tasks = new Set(qs.filter(q => q.status === "open" && q.attach_type === "task")
-      .map(q => parseInt(q.attach_id, 10)));
-    const tasks = data.tasks.filter(t => t.state !== "trashed");
-    const lanes = ["idea", "plan", "proposed", "approved", "building", "review", "done", "paused"];
-    const cols = lanes.map(st => {
-      const cards = tasks.filter(t => t.state === st).map(t => {
-        const tag_list = (t.tags || "").split(",").map(s => s.trim()).filter(Boolean).slice(0, 2);
-        return `<div class="kcard" data-task="${t.id}">
-          <div class="kt">${esc(t.title)}</div>
-          <div class="kmeta">
-            ${t.priority === "high" || t.priority === "urgent"
-              ? `<span class="tag t-${t.priority}">${esc(t.priority)}</span>` : ""}
-            ${open_q_tasks.has(t.id) ? '<span class="tag t-proposed" title="has open question">\u2744</span>' : ""}
-            ${t.proof_waived ? '<span class="tag t-done">waived</span>' : ""}
-            ${tag_list.map(tg => `<span>${esc(tg)}</span>`).join("")}
-            <span style="flex:1"></span>
-            ${t.assignee_id ? avatar(t.assignee_id, IDNAME[t.assignee_id]) : ""}
-            <span>${ago(t.state_changed_at)}</span>
-          </div></div>`;
-      }).join("");
-      return `<div class="kcol"><h4><span class="st-${st}">${st}</span>
-        <span class="cnt">${tasks.filter(t => t.state === st).length}</span></h4>
-        ${cards || '<div class="dim small" style="padding:4px 2px">—</div>'}</div>`;
-    }).join("");
-    return `<div class="board">${cols}</div>`;
-  };
+  const board_html = () => '<div class="boardpage" id="boardwrap"></div>';
   const tab_discussions = (discs, pid) => discs.length ? discs.map(d => `
     <div class="attrow"><span>
       ${d.status === "closed" ? "\uD83D\uDD12" : ""} <a href="#/discussion/${d.id}?p=${pid}">${esc(d.title)}</a>
@@ -1025,6 +1299,53 @@ async function view_project(parts) {
   catch (e) { main.innerHTML = `<p>${esc(e.message)}</p>`; }
   return mark_refresh(reload);
 }
+
+/* ================= Stack-wide board ================= */
+async function view_stack(parts) {
+  const sid = parseInt(parts[0], 10) || 0;
+  tab_highlight("");
+  const main = $("#main");
+  main.innerHTML = '<p class="dim">loading…</p>';
+  let tasks = [], qrows = [];
+  const reload = async () => {
+    const r = await api("GET", `/api/stacks/${sid}/tasks`);
+    qrows = await api("GET", "/api/questions?open=1").catch(() => []);
+    tasks = r.tasks || [];
+    render();
+  };
+  const render = () => {
+    const stack = SHELL.stacks.find(x => x.id === sid);
+    const projects = SHELL.projects.filter(x => x.stack_id === sid && !x.archived);
+    const all_tags = [...new Set(tasks.flatMap(t =>
+      (t.tags || "").split(",").map(x => x.trim()).filter(Boolean)))].sort();
+    document.body.classList.add("boardwide");
+    BOARD.filters = board_parse_q();
+    BOARD.ctx = {
+      tasks,
+      frozen: new Set(qrows.filter(q => q.attach_type === "task")
+        .map(q => parseInt(q.attach_id, 10))),
+      all_tags,
+      stack_mode: true,
+      has_paused: tasks.some(t => t.state === "paused"),
+      projects,
+      reload,
+    };
+    const head = page_head({
+      type: "Stack board",
+      crumb: `<a href="#/organize">${esc(stack ? stack.name : "stack")}</a> <span>/</span><span>all projects</span>`,
+      title: esc(stack ? stack.name : "Stack"),
+      meta: `<span class="dim small">${projects.length} project${projects.length === 1 ? "" : "s"} · ${tasks.length} task${tasks.length === 1 ? "" : "s"} — one board across the stack</span>`,
+      actions: "",
+    });
+    main.innerHTML = head + '<div class="boardpage" id="boardwrap"></div>';
+    board_paint();
+    shell_render_selectors();
+  };
+  await reload();
+  return mark_refresh(reload);
+}
+ROUTES.push({ name: "stack", view: view_stack });
+
 ROUTES.push({ name: "project", view: view_project });
 
 /* identity name directory (display only) */

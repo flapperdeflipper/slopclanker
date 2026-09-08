@@ -2,6 +2,34 @@
 All notable changes to this project will be documented in this file.
 
 
+## [1.3.0] — 2026-09-08
+
+- **Board redesigned from the ground up — responsive, no horizontal
+  scrolling on any device.**
+  - One board model, three shapes: kanban with grouped lanes
+    (Backlog / Proposed / In progress / Review / Done) on desktop,
+    three merged groups on tablets, stacked collapsible sections on
+    phones. Sub-states travel as chips on cards, so grouping never
+    hides information; group headers expand into sub-lanes.
+  - Raw 8-lane mode returns via a `lanes: all` toggle on wide
+    screens; grouping and density preferences persist per identity.
+  - Columns scroll internally (sticky headers, fade edge) — the page
+    itself stops growing. `Done` collapses to the latest ten with
+    "show N earlier".
+  - Board toolbar: live text search, tag filter, "mine",
+    "⏸ paused", "hide done"; filter state lives in the URL hash and
+    is shareable.
+  - Quick-advance: `→` on card hover (always visible on touch)
+    opens the labeled transition modal; clankers never see
+    human-only targets. No drag-and-drop — transitions stay
+    deliberate.
+  - **Stack-wide board**: the project selector gains
+    "– all projects · board –" (`#/stack/{id}/board`) — one board
+    across every project in a stack with project chips and a project
+    filter, backed by the new `GET /api/stacks/{id}/tasks`.
+  - Accessibility pass: cards are focusable buttons with labels,
+    touch targets ≥40px, counts exposed to screen readers.
+
 ## [1.2.2] — 2026-09-08
 
 - **Fixed: "+ new stack/project…" dead click on empty installs.** With
