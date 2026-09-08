@@ -2,6 +2,17 @@
 All notable changes to this project will be documented in this file.
 
 
+## [1.2.2] — 2026-09-08
+
+- **Fixed: "+ new stack/project…" dead click on empty installs.** With
+  zero stacks (or projects) the create option was the select's only —
+  and therefore pre-selected — option; clicking a pre-selected option
+  fires no change event, so the create modal never opened. Empty
+  selectors now show a "no stacks yet"/"no projects yet" placeholder
+  and the create option is never pre-selected.
+- `index.html` is now served with `Cache-Control: no-cache` so rapid
+  releases cannot leave browsers on a stale UI build.
+
 ## [1.2.1] — 2026-09-08
 
 - **Fixed: login 404 through Home Assistant ingress.** The SPA issued
