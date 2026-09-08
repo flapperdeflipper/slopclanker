@@ -150,6 +150,11 @@ padding:9px 4px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 const $ = (sel, el) => (el || document).querySelector(sel);
 const $$ = (sel, el) => Array.from((el || document).querySelectorAll(sel));
 let TOKEN = localStorage.getItem("sk_token") || "";
+
+/* HA ingress serves the app under /api/hassio_ingress/<token>/ — prefix every
+   request with that base so absolute /api calls stay on the ingress origin. */
+const BASE = location.pathname.startsWith("/api/hassio_ingress/")
+  ? location.pathname.replace(/\/+$/, "") : "";
 let ME = null;
 
 function toast(msg, err) {
@@ -185,7 +190,7 @@ async function api(method, path, body) {
   if (TOKEN) opt.headers.Authorization = "Bearer " + TOKEN;
   if (body !== undefined) opt.headers["Content-Type"] = "application/json";
   if (body !== undefined) opt.body = JSON.stringify(body);
-  const r = await fetch(path, opt);
+  const r = await fetch(BASE + path, opt);
   if (r.status === 401 && TOKEN) { logoutLocal(); throw new Error("session expired"); }
   const ct = r.headers.get("content-type") || "";
   const data = ct.includes("json") ? await r.json() : await r.text();
@@ -208,7 +213,7 @@ function sse_start() {
     const ctl = new AbortController();
     SSE.ctrl = ctl;
     try {
-      const r = await fetch("/api/stream?since=" + SSE.since, {
+      const r = await fetch(BASE + "/api/stream?since=" + SSE.since, {
         headers: { Authorization: "Bearer " + TOKEN }, signal: ctl.signal });
       if (!r.ok || !r.body) throw new Error("stream " + r.status);
       const reader = r.body.getReader();

@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file.
 
 
+## [1.2.1] — 2026-09-08
+
+- **Fixed: login 404 through Home Assistant ingress.** The SPA issued
+  absolute `/api/...` requests; served under
+  `/api/hassio_ingress/<token>/` those left the ingress origin and hit
+  HA Core (404). All requests (including the SSE stream) are now
+  prefixed with the ingress base path detected from
+  `location.pathname`; direct access on the mapped port is unchanged.
+
 ## [1.2.0] — 2026-09-07
 
 - **Accounts & preferences (feedback round 2).**
