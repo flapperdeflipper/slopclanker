@@ -112,7 +112,9 @@ async def healthz(request: Request) -> JSONResponse:
 
 @mcp.custom_route("/", methods=["GET"])
 async def index(request: Request) -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(
+        STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"}
+    )
 
 
 @mcp.custom_route("/favicon.ico", methods=["GET"])

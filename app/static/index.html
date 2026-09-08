@@ -362,9 +362,13 @@ function shell_render_selectors() {
   const proj = SHELL.projects.find(p => p.id === current_project_id());
   const ssel = $("#sel-stack"), psel = $("#sel-project");
   const stacks = SHELL.stacks.filter(s => !s.archived);
-  ssel.innerHTML = stacks.map(s =>
+  /* with zero stacks the __new option would be the only (and pre-selected)
+     one — clicking a pre-selected option fires no change event, so the
+     create modal would never open. An explicit placeholder fixes that. */
+  ssel.innerHTML = (stacks.length ? stacks.map(s =>
     `<option value="${s.id}" ${proj && proj.stack_id === s.id ? "selected" : ""}>${esc(s.name)}</option>`
-  ).join("") + '<option value="__new">+ new stack…</option>';
+  ).join("") : '<option value="" selected>no stacks yet</option>')
+    + '<option value="__new">+ new stack…</option>';
   const groups = {};
   SHELL.projects.filter(p => !p.archived).forEach(p => {
     const key = p.stack_id || 0;
@@ -380,8 +384,8 @@ function shell_render_selectors() {
     opt += `<optgroup label="No stack">${groups[0].map(p =>
       `<option value="${p.id}" ${proj && proj.id === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</optgroup>`;
   const none = !opt;
-  psel.innerHTML = opt + '<option value="__new">+ new project…</option>'
-    + (none ? "" : "");
+  psel.innerHTML = (none ? '<option value="" selected>no projects yet</option>' : opt)
+    + '<option value="__new">+ new project…</option>';
   ssel.style.display = ""; psel.style.display = "";
   if (proj && proj.stack_id) {
     const def = parseInt(SHELL.prefs.default_stack, 10) === proj.stack_id;
@@ -394,6 +398,7 @@ function shell_bind_selectors() {
   $("#sel-stack").onchange = async e => {
     if (e.target.value === "__new") { e.target.value = ""; return open_new_stack(); }
     const sid = parseInt(e.target.value, 10);
+    if (!sid) return; /* placeholder */
     const first = SHELL.projects.find(p => !p.archived && p.stack_id === sid);
     if (first) location.hash = `#/project/${first.id}/board`;
   };
@@ -404,6 +409,7 @@ function shell_bind_selectors() {
       e.target.value = cur ? String(cur) : "";
       return open_new_project(proj ? proj.stack_id : null);
     }
+    if (!e.target.value) return; /* placeholder */
     location.hash = `#/project/${e.target.value}/board`;
   };
   $("#star").onclick = async () => {
