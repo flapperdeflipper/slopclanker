@@ -872,6 +872,25 @@ async def api_project_get(request: Request) -> JSONResponse:
     return JSONResponse({"project": dict(proj), "tasks": [dict(t) for t in tasks]})
 
 
+@mcp.custom_route("/api/stacks/{sid:int}/tasks", methods=["GET"])
+async def api_stack_tasks(request: Request) -> JSONResponse:
+    """Board feed: every task across a stack's projects (+ project_name)."""
+    sid = request.path_params["sid"]
+    _actor, err = _require_actor(request)
+    if err:
+        return err
+    conn = _db()
+    try:
+        if not conn.execute("SELECT 1 FROM stacks WHERE id = ?", (sid,)).fetchone():
+            raise objects.ObjectError("no such stack")
+        tasks = objects.stack_tasks(conn, stack_id=sid)
+    except Exception as exc:  # noqa: BLE001 — typed mapping below
+        return _svc_error(exc)
+    finally:
+        conn.close()
+    return JSONResponse({"tasks": [dict(t) for t in tasks]})
+
+
 @mcp.custom_route("/api/projects/{pid:int}", methods=["PATCH"])
 async def api_project_edit(request: Request) -> JSONResponse:
     pid = request.path_params["pid"]

@@ -425,6 +425,17 @@ def list_tasks(
     return conn.execute(q + " ORDER BY id", args).fetchall()
 
 
+def stack_tasks(conn, *, stack_id: int) -> list[sqlite3.Row]:
+    """All tasks across a stack's projects, with project names for chips."""
+    return conn.execute(
+        "SELECT t.*, p.name AS project_name FROM tasks t "
+        "JOIN projects p ON p.id = t.project_id "
+        "WHERE p.stack_id = ? AND t.state != 'trashed' "
+        "ORDER BY p.id, t.id",
+        (stack_id,),
+    ).fetchall()
+
+
 def edit_task(
     conn,
     actor,
