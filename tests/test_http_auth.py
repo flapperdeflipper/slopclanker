@@ -42,15 +42,15 @@ async def test_protected_route_requires_bearer(env):
 
 
 @pytest.mark.anyio
-async def test_registration_disabled_without_reg_token(env, monkeypatch):
+async def test_registration_open_without_reg_token(env, monkeypatch):
+    """1.4.0: unset token = open device flow (rate limit + human approval)."""
     monkeypatch.delenv("SLOPCLANKER_REG_TOKEN", raising=False)
     async with _client() as c:
         r = await c.post(
             "/api/auth/register",
-            headers={"Authorization": f"Bearer {REG_TOKEN}"},
             json={"name": "clanker-a", "claim_secret": CLAIM},
         )
-        assert r.status_code == 503
+        assert r.status_code == 201
 
 
 @pytest.mark.anyio

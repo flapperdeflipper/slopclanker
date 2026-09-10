@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file.
 
 
+## [1.4.0] — 2026-09-08
+
+- **Device-flow enrollment — no shared secrets for agents.**
+  Registration no longer requires a registration token by default:
+  requests are rate-limited and the human approval stays the only
+  trust gate, so nothing secret has to be handed to an enrolling
+  agent. Set `SLOPCLANKER_REG_TOKEN` to restore strict bearer mode.
+- New `scripts/agent_enroll.sh`: end-to-end enrollment (register →
+  wait for approval → token written straight to a 0600 file). The
+  claim secret and the delivered token never appear in output, logs,
+  or any calling process's context.
+
 ## [1.3.0] — 2026-09-08
 
 - **Board redesigned from the ground up — responsive, no horizontal
