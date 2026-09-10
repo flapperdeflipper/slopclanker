@@ -89,6 +89,24 @@ margin-bottom:14px;flex-wrap:wrap}
 .tabs a{padding:8px 14px;color:var(--dim);border-bottom:2px solid transparent;margin-bottom:-1px}
 .tabs a.on{color:var(--fg);border-bottom-color:var(--acc);font-weight:600}
 .tabs .cnt{background:var(--pan3);border-radius:9px;padding:0 7px;font-size:11px;margin-left:5px}
+/* selector dropdowns (custom: native select popups misbehave with long lists) */
+.selbtn{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+background:var(--pan2);border:1px solid var(--line);border-radius:6px;
+padding:4px 8px;font:inherit;color:var(--fg)}
+.selbtn:hover{border-color:var(--acc)}
+.selpop{position:fixed;z-index:25;background:var(--pan);border:1px solid var(--line2);
+border-radius:10px;width:min(340px,94vw);max-height:min(430px,64vh);display:flex;
+flex-direction:column;box-shadow:0 8px 26px rgba(0,0,0,.5)}
+.selpop .selsearch{padding:8px 8px 4px}
+.selpop .selsearch input{width:100%;padding:4px 9px;border-radius:13px}
+.selitems{overflow-y:auto;overscroll-behavior:contain;padding:4px 6px 6px;
+scrollbar-width:thin;min-height:44px;flex:1;min-height:0}
+.selgroup{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;
+color:var(--dim);padding:8px 8px 2px}
+.selitem{padding:7px 10px;border-radius:6px;cursor:pointer;display:flex;gap:10px;
+justify-content:space-between;align-items:center}
+.selitem:hover,.selitem.hl{background:var(--pan2)}
+.selitem.sel{color:var(--acc);font-weight:600}
 /* board toolbar */
 .btool{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin:0 0 12px}
 .btool .sp{flex:1}
@@ -170,8 +188,10 @@ padding:9px 4px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 <body>
 <header>
   <span class="logo">&#9879; SlopClanker</span>
-  <select id="sel-stack" style="display:none" title="stack"></select>
-  <select id="sel-project" style="display:none" title="project"></select>
+  <button class="selbtn" id="sel-stack" style="display:none" title="stack"
+    aria-haspopup="listbox"></button>
+  <button class="selbtn" id="sel-project" style="display:none" title="project"
+    aria-haspopup="listbox"></button>
   <button class="ghost" id="star" style="display:none" title="make this stack the default">&#9734;</button>
   <nav id="nav"></nav>
   <span style="flex:1"></span>
@@ -394,41 +414,90 @@ async function shell_load() {
   SHELL.stacks = stacks; SHELL.projects = projects; SHELL.prefs = prefs || {};
 }
 
-function current_project_id() {
-  const m = (location.hash || "").match(/#\/project\/(\d+)/);
-  return m ? parseInt(m[1], 10) : null;
+const SEL = { stack: null, project: null };
+const CHEV = ' <span class="dim">\u25be</span>';
+
+function shell_current_project() {
+  const key = ((location.hash || "").match(/#\/project\/([^/?]+)/) || [])[1];
+  if (!key) return null;
+  return SHELL.projects.find(p => String(p.id) === key || p.slug === key) || null;
+}
+
+function sel_close_popups() { $$(".selpop").forEach(x => x.remove()); }
+
+function sel_open_popup(btn, sections, onpick) {
+  sel_close_popups();
+  const pop = document.createElement("div");
+  pop.className = "selpop";
+  const r = btn.getBoundingClientRect();
+  pop.style.top = r.bottom + 6 + "px";
+  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - 356)) + "px";
+  pop.innerHTML = '<div class="selsearch"><input type="search" placeholder="filter\u2026" aria-label="filter"></div>'
+    + '<div class="selitems" role="listbox"></div>';
+  document.body.appendChild(pop);
+  const inp = $("input", pop), list = $(".selitems", pop);
+  let flat = [], hl = -1;
+  const paint = q => {
+    q = (q || "").trim().toLowerCase();
+    flat = [];
+    let html = "";
+    for (const sec of sections) {
+      const entries = sec.items.filter(it => !q || it.label.toLowerCase().includes(q));
+      if (!entries.length) continue;
+      if (sec.label) html += `<div class="selgroup">${esc(sec.label)}</div>`;
+      for (const it of entries) {
+        html += `<div class="selitem${it.key === btn.dataset.cur ? " sel" : ""}" data-key="${esc(it.key)}"
+          role="option">${esc(it.label)}${it.right ? `<span class="dim small">${esc(it.right)}</span>` : ""}</div>`;
+        flat.push(it);
+      }
+    }
+    list.innerHTML = html || '<div class="selitem dim">no matches</div>';
+    hl = -1;
+    $$(".selitem[data-key]", list).forEach(el =>
+      el.onclick = () => { sel_close_popups(); onpick(flat.find(x => x.key === el.dataset.key)); });
+  };
+  const move = d => {
+    const els = $$(".selitem[data-key]", list);
+    if (!els.length) return;
+    hl = (hl + d + els.length) % els.length;
+    els.forEach((e, i) => e.classList.toggle("hl", i === hl));
+    els[hl].scrollIntoView({ block: "nearest" });
+  };
+  inp.oninput = () => paint(inp.value);
+  inp.onkeydown = e => {
+    if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      const els = $$(".selitem[data-key]", list);
+      const idx = hl >= 0 ? hl : els.findIndex(x => x.classList.contains("sel"));
+      const pick = flat[idx >= 0 ? idx : 0];
+      if (pick) { sel_close_popups(); onpick(pick); }
+    } else if (e.key === "Escape") sel_close_popups();
+  };
+  paint("");
+  const off = ev => {
+    if (!pop.contains(ev.target) && ev.target !== btn && !btn.contains(ev.target)) {
+      sel_close_popups();
+      removeEventListener("pointerdown", off, true);
+    }
+  };
+  addEventListener("pointerdown", off, true);
+  setTimeout(() => inp.focus(), 0);
 }
 
 function shell_render_selectors() {
-  const proj = SHELL.projects.find(p => p.id === current_project_id());
-  const ssel = $("#sel-stack"), psel = $("#sel-project");
-  const stacks = SHELL.stacks.filter(s => !s.archived);
-  /* with zero stacks the __new option would be the only (and pre-selected)
-     one — clicking a pre-selected option fires no change event, so the
-     create modal would never open. An explicit placeholder fixes that. */
-  ssel.innerHTML = (stacks.length ? stacks.map(s =>
-    `<option value="${s.id}" ${proj && proj.stack_id === s.id ? "selected" : ""}>${esc(s.name)}</option>`
-  ).join("") : '<option value="" selected>no stacks yet</option>')
-    + '<option value="__new">+ new stack…</option>';
-  const groups = {};
-  SHELL.projects.filter(p => !p.archived).forEach(p => {
-    const key = p.stack_id || 0;
-    (groups[key] = groups[key] || []).push(p);
-  });
-  let opt = "";
-  for (const s of stacks) {
-    const gp = (groups[s.id] || []).map(p =>
-      `<option value="${p.id}" ${proj && proj.id === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
-    if (gp) opt += `<optgroup label="${esc(s.name)}">${gp}</optgroup>`;
-  }
-  if (groups[0] && groups[0].length)
-    opt += `<optgroup label="No stack">${groups[0].map(p =>
-      `<option value="${p.id}" ${proj && proj.id === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</optgroup>`;
-  const none = !opt;
-  psel.innerHTML = (none ? '<option value="" selected>no projects yet</option>'
-    : '<option value="__all">– all projects · board –</option>' + opt)
-    + '<option value="__new">+ new project…</option>';
-  ssel.style.display = ""; psel.style.display = "";
+  const proj = shell_current_project();
+  const stacks = SHELL.stacks.filter(x => !x.archived);
+  const stack = proj ? stacks.find(x => x.id === proj.stack_id) : null;
+  SEL.stack = stack || null;
+  SEL.project = proj;
+  const sb = $("#sel-stack"), pb = $("#sel-project");
+  sb.innerHTML = esc(stack ? stack.name : stacks.length ? "stack" : "no stacks yet") + CHEV;
+  pb.innerHTML = esc(proj ? proj.name : "project") + CHEV;
+  sb.dataset.cur = stack ? String(stack.id) : "";
+  pb.dataset.cur = proj ? String(proj.id) : "";
+  sb.style.display = ""; pb.style.display = "";
   if (proj && proj.stack_id) {
     const def = parseInt(SHELL.prefs.default_stack, 10) === proj.stack_id;
     $("#star").textContent = def ? "\u2605" : "\u2606";
@@ -437,32 +506,51 @@ function shell_render_selectors() {
 }
 
 function shell_bind_selectors() {
-  $("#sel-stack").onchange = async e => {
-    if (e.target.value === "__new") { e.target.value = ""; return open_new_stack(); }
-    const sid = parseInt(e.target.value, 10);
-    if (!sid) return; /* placeholder */
-    const first = SHELL.projects.find(p => !p.archived && p.stack_id === sid);
-    if (first) location.hash = `#/project/${proj_ref(first)}/board`;
+  $("#sel-stack").onclick = () => {
+    const stacks = SHELL.stacks.filter(x => !x.archived);
+    sel_open_popup($("#sel-stack"), [
+      { items: stacks.map(x => ({ key: String(x.id), label: x.name })) },
+      { items: [{ key: "__new", label: "+ new stack\u2026" }] },
+    ], it => {
+      if (!it) return;
+      if (it.key === "__new") return open_new_stack();
+      const sid = parseInt(it.key, 10);
+      const first = SHELL.projects.find(p => !p.archived && p.stack_id === sid);
+      if (first) location.hash = `#/project/${proj_ref(first)}/board`;
+    });
   };
-  $("#sel-project").onchange = async e => {
-    if (e.target.value === "__all") {
-      const sv = $("#sel-stack").value;
-      const sstk = SHELL.stacks.find(x => String(x.id) === sv);
-      if (sv) { location.hash = `#/stack/${sstk ? stack_ref(sstk) : sv}/board`; return; }
-      e.target.value = ""; return;
-    }
-    if (e.target.value === "__new") {
-      const cur = current_project_id();
-      const proj = SHELL.projects.find(p => p.id === cur);
-      e.target.value = cur ? String(cur) : "";
-      return open_new_project(proj ? proj.stack_id : null);
-    }
-    if (!e.target.value) return; /* placeholder */
-    const pnav = SHELL.projects.find(x => String(x.id) === e.target.value);
-    location.hash = `#/project/${pnav ? proj_ref(pnav) : e.target.value}/board`;
+  $("#sel-project").onclick = () => {
+    const stacks = SHELL.stacks.filter(x => !x.archived);
+    const groups = {};
+    SHELL.projects.filter(p => !p.archived).forEach(p => {
+      const k = p.stack_id || 0;
+      (groups[k] = groups[k] || []).push(p);
+    });
+    const secs = [];
+    for (const st of stacks)
+      if ((groups[st.id] || []).length)
+        secs.push({ label: st.name, items: groups[st.id].map(p =>
+          ({ key: String(p.id), label: p.name })) });
+    if ((groups[0] || []).length)
+      secs.push({ label: "No stack", items: groups[0].map(p =>
+        ({ key: String(p.id), label: p.name })) });
+    secs.push({ items: [
+      ...(secs.length ? [{ key: "__all", label: "\u2013 all projects \u00b7 board \u2013" }] : []),
+      { key: "__new", label: "+ new project\u2026" },
+    ] });
+    sel_open_popup($("#sel-project"), secs, it => {
+      if (!it) return;
+      if (it.key === "__all") {
+        if (SEL.stack) { location.hash = `#/stack/${stack_ref(SEL.stack)}/board`; return; }
+        return;
+      }
+      if (it.key === "__new") return open_new_project(SEL.stack ? SEL.stack.id : null);
+      const pnav = SHELL.projects.find(x => String(x.id) === it.key);
+      if (pnav) location.hash = `#/project/${proj_ref(pnav)}/board`;
+    });
   };
   $("#star").onclick = async () => {
-    const proj = SHELL.projects.find(p => p.id === current_project_id());
+    const proj = shell_current_project();
     if (!proj || !proj.stack_id) return toast("this project has no stack", true);
     try {
       await api("PUT", "/api/prefs/default_stack", { value: String(proj.stack_id) });
@@ -487,8 +575,8 @@ function open_new_stack() {
       route(); /* home adapts its empty state once a stack exists */
     const sid = (r && r.id) || null;
     if (sid) {
-      const s = SHELL.stacks.find(x => x.id === sid);
-      if (s) $("#sel-stack").value = String(sid);
+      const st = SHELL.stacks.find(x => x.id === sid);
+      if (st) shell_render_selectors();
     }
   });
 }

@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file.
 
 
+## [1.4.3] — 2026-09-10
+
+- **Custom selector dropdowns.** The header stack/project selectors are
+  no longer native `<select>` popups (which break scrolling with long
+  lists — you could scroll down but not back up). They are now app-owned
+  dropdowns: type-to-filter, keyboard navigation (arrows/Enter/Esc),
+  grouped by stack, full bidirectional scrolling, and the same special
+  entries (all-projects board, + new…). Slug URLs now also highlight the
+  current selection correctly.
+
 ## [1.4.2] — 2026-09-10
 
 - **Slugs are real now.** Project and stack routes accept slugs
