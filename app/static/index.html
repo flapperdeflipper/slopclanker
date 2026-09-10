@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SlopClanker</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230f1317'/%3E%3Cpath d='M26 12h12v4h-4v9l11 19a8 8 0 0 1-7 12H26a8 8 0 0 1-7-12l11-19v-9h-4z' fill='%234fb6ff'/%3E%3Ccircle cx='32' cy='47' r='3.4' fill='%230f1317'/%3E%3C/svg%3E">
 <style>
 :root{--bg:#0f1317;--pan:#161c22;--pan2:#1d252d;--pan3:#242e38;--fg:#e3e9ef;--dim:#8a98a5;
 --acc:#4fb6ff;--ok:#5ad4a0;--warn:#ffb454;--bad:#ff6b7a;--line:#28313a;--line2:#323d48;
@@ -441,12 +442,13 @@ function shell_bind_selectors() {
     const sid = parseInt(e.target.value, 10);
     if (!sid) return; /* placeholder */
     const first = SHELL.projects.find(p => !p.archived && p.stack_id === sid);
-    if (first) location.hash = `#/project/${first.id}/board`;
+    if (first) location.hash = `#/project/${proj_ref(first)}/board`;
   };
   $("#sel-project").onchange = async e => {
     if (e.target.value === "__all") {
-      const sid = parseInt($("#sel-stack").value, 10);
-      if (sid) { location.hash = `#/stack/${sid}/board`; return; }
+      const sv = $("#sel-stack").value;
+      const sstk = SHELL.stacks.find(x => String(x.id) === sv);
+      if (sv) { location.hash = `#/stack/${sstk ? stack_ref(sstk) : sv}/board`; return; }
       e.target.value = ""; return;
     }
     if (e.target.value === "__new") {
@@ -456,7 +458,8 @@ function shell_bind_selectors() {
       return open_new_project(proj ? proj.stack_id : null);
     }
     if (!e.target.value) return; /* placeholder */
-    location.hash = `#/project/${e.target.value}/board`;
+    const pnav = SHELL.projects.find(x => String(x.id) === e.target.value);
+    location.hash = `#/project/${pnav ? proj_ref(pnav) : e.target.value}/board`;
   };
   $("#star").onclick = async () => {
     const proj = SHELL.projects.find(p => p.id === current_project_id());
@@ -505,7 +508,7 @@ function open_new_project(stack_id) {
       description: v.description });
     await shell_refresh();
     toast("project created");
-    if (r && r.id) location.hash = `#/project/${r.id}/board`;
+    if (r && r.id) location.hash = `#/project/${r.slug || r.id}/board`;
   }, true);
 }
 
@@ -776,7 +779,7 @@ async function view_home() {
   const target = live.find(p => p.id === pref_project)
     || live.find(p => p.stack_id === pref_stack)
     || live.find(p => p.stack_id) || live[0];
-  if (target) { location.hash = `#/project/${target.id}/board`; return; }
+  if (target) { location.hash = `#/project/${proj_ref(target)}/board`; return; }
   const stacks = SHELL.stacks.filter(x => !x.archived);
   const stack = stacks.find(x => x.id === pref_stack) || stacks[0];
   const body = stacks.length
@@ -1153,13 +1156,35 @@ addEventListener("resize", () => {
 const PROJECT_TABS = [["board", "Board"], ["discussions", "Discussions"],
                       ["notes", "Notes"], ["decisions", "Decisions"]];
 
+const proj_ref = p => p && (p.slug || String(p.id));
+const stack_ref = st => st && (st.slug || String(st.id));
+async function resolve_project(key) {
+  const id = parseInt(key, 10);
+  if (Number.isInteger(id) && String(id) === String(key)) return id;
+  await shell_load().catch(() => { });
+  const p = SHELL.projects.find(x => x.slug === key);
+  return p ? p.id : null;
+}
+async function resolve_stack(key) {
+  const id = parseInt(key, 10);
+  if (Number.isInteger(id) && String(id) === String(key)) return id;
+  await shell_load().catch(() => { });
+  const st = SHELL.stacks.find(x => x.slug === key);
+  return st ? st.id : null;
+}
+
 async function view_project(parts) {
-  const pid = parseInt(parts[0], 10);
+  const pid = await resolve_project(parts[0]);
   const tab = PROJECT_TABS.some(t => t[0] === parts[1]) ? parts[1] : "board";
   tab_highlight("");
   const main = $("#main");
   main.innerHTML = '<p class="dim">loading…</p>';
   let data, qs, discs, decs, notes, tags, dir;
+  if (!pid) {
+    $("#main").innerHTML = '<div class="card"><div class="empty">'
+      + '<div class="big">No such project</div>check the URL — slugs and ids both work</div></div>';
+    return;
+  }
   const reload = async () => {
     data = await api("GET", `/api/projects/${pid}`);
     [qs, discs, decs, notes, tags, dir] = await Promise.all([
@@ -1194,7 +1219,7 @@ async function view_project(parts) {
       const cnt = id === "discussions" ? discs.length
         : id === "notes" ? (notes || []).length
         : id === "decisions" ? decs.length : "";
-      return `<a href="#/project/${pid}/${id}" class="${tab === id ? "on" : ""}">${label}
+      return `<a href="#/project/${proj_ref(p) || pid}/${id}" class="${tab === id ? "on" : ""}">${label}
         ${cnt !== "" ? `<span class="cnt">${cnt}</span>` : ""}</a>`;
     }).join("") + `</div>`;
     let body = "";
@@ -1256,15 +1281,19 @@ async function view_project(parts) {
       location.hash = "#/task/" + el.dataset.task);
     const pe = $("#pe"); if (pe) pe.onclick = () => modal_form("Edit project", [
       { id: "name", label: "name", type: "title", value: p.name, required: true },
+      { id: "slug", label: "slug (url)", value: p.slug },
       { id: "description", label: "description", type: "textarea", value: p.description },
       { id: "stack_id", label: "stack", type: "select",
         options: [["", "— no stack —"]].concat(SHELL.stacks.filter(s => !s.archived)
           .map(s => [String(s.id), s.name])), value: p.stack_id ? String(p.stack_id) : "" },
     ], "save", async v => {
       await api("PATCH", `/api/projects/${pid}`, {
-        name: v.name, description: v.description,
+        name: v.name, description: v.description, slug: v.slug || undefined,
         stack_id: v.stack_id ? parseInt(v.stack_id, 10) : null });
-      await shell_refresh(); toast("saved"); await reload();
+      await shell_refresh(); toast("saved");
+      if (v.slug && v.slug !== p.slug)
+        location.hash = `#/project/${v.slug}/board`; /* follow the new slug */
+      else await reload();
     }, true);
     $("#pt").onclick = () => modal_form("New task", [
       { id: "title", label: "title", type: "title", required: true,
@@ -1315,7 +1344,7 @@ async function view_project(parts) {
 
 /* ================= Stack-wide board ================= */
 async function view_stack(parts) {
-  const sid = parseInt(parts[0], 10) || 0;
+  const sid = (await resolve_stack(parts[0])) || 0;
   tab_highlight("");
   const main = $("#main");
   main.innerHTML = '<p class="dim">loading…</p>';
@@ -1752,10 +1781,11 @@ async function view_organize() {
       const s = SHELL.stacks.find(x => x.id === parseInt(b.dataset.sedit, 10));
       modal_form("Edit stack", [
         { id: "name", label: "name", type: "title", value: s.name, required: true },
+        { id: "slug", label: "slug (url)", value: s.slug },
         { id: "description", label: "description", type: "textarea", value: s.description },
       ], "save", async v => {
         await api("PATCH", `/api/stacks/${s.id}`,
-          { name: v.name, description: v.description });
+          { name: v.name, description: v.description, slug: v.slug || undefined });
         await reload();
       }, true);
     });
