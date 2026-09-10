@@ -9,10 +9,15 @@ Current surface (phases 1-2):
 - `GET /healthz` — liveness
 - `GET /api/setup` / `POST /api/setup` — first-run superadmin wizard
   (409 once done)
-- Clanker pipeline (all guarded by the **registration token** as bearer):
-  - `POST /api/auth/register` `{name, note, claim_secret}`
+- Clanker pipeline (**device flow** — no shared secret by default;
+  set `SLOPCLANKER_REG_TOKEN` to require it as a bearer for strict mode):
+  - `POST /api/auth/register` `{name, note, claim_secret}` — queues a
+    request for human approval (rate-limited; approval is the trust gate)
   - `POST /api/auth/register/{id}/poll` `{claim_secret}` — delivers the
     agent token once, live, to the registering process
+  - `scripts/agent_enroll.sh <base> <name> <token-file>` — end-to-end
+    enrollment: registers, waits for approval, writes the token to a
+    0600 file without ever printing it
   - `POST /api/auth/enroll` `{code}` — redeem a one-time enrollment code
   - `POST /api/auth/reenroll` `{name}` — key-loss: notifies admins
 - Humans: `POST /api/auth/login`, `GET /api/auth/whoami`,

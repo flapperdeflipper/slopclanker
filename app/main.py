@@ -76,10 +76,16 @@ def _actor(request: Request) -> dict | None:
 
 
 def _reg_token_ok(request: Request) -> bool:
-    """Registration endpoints authenticate with the shared registration token."""
+    """Registration gate.
+
+    With SLOPCLANKER_REG_TOKEN configured, strict shared-secret mode applies
+    (bearer required). Without it, registration is open and relies on rate
+    limiting plus the human approval gate — the actual trust decision — so no
+    secret ever has to be handed to an enrolling agent.
+    """
     expected = os.environ.get("SLOPCLANKER_REG_TOKEN", "")
     if not expected:
-        return False
+        return True
     raw = request.headers.get("authorization", "")
     presented = raw[7:] if raw.lower().startswith("bearer ") else ""
     return hmac.compare_digest(presented.encode(), expected.encode())
