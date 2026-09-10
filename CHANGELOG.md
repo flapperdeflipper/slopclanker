@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file.
 
 
+## [Unreleased]
+
+- Removed the legacy 0.x archive (`docs/legacy-archive/`) and the
+  one-time cutover tooling (`export_legacy.py`, `cutover_seed.py`).
+  The legacy board was decommissioned at the v1 cutover; history
+  remains in git.
+
 ## [1.4.1] — 2026-09-10
 
 - **Fixed: stale "create your first stack" welcome after creating a

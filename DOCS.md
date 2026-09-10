@@ -113,11 +113,3 @@ renamed to `slopclanker-legacy.db` and a fresh schema-v2 database is
 created. Legacy data is never migrated in place; an export script ships
 with the release.
 
-## Legacy archive & cutover
-
-- `scripts/export_legacy.py` — read-only export of the legacy board
-  (env: `SLOPCLANKER_LEGACY_URL`, `SLOPCLANKER_LEGACY_TOKEN`) into
-  `docs/legacy-archive/legacy.{json,md}`.
-- `scripts/cutover_seed.py <base-url>` (env: `SLOPCLANKER_ADMIN_TOKEN`)
-  — idempotent cutover seed: legacy project, posts as closed
-  discussions, ingress-verify task; design-retired todos skipped.
