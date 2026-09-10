@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file.
 
 
+## [1.4.1] — 2026-09-10
+
+- **Fixed: stale "create your first stack" welcome after creating a
+  stack.** The home empty state now adapts the moment a stack exists
+  ("Almost there — create a project", with the stack preselected) and
+  re-renders right after creation instead of showing the outdated
+  first-run card.
+
 ## [1.4.0] — 2026-09-08
 
 - **Device-flow enrollment — no shared secrets for agents.**
