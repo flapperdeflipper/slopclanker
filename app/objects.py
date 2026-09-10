@@ -108,7 +108,9 @@ def create_stack(
     return cur.lastrowid
 
 
-def edit_stack(conn, actor, stack_id: int, *, name=None, description=None) -> None:
+def edit_stack(
+    conn, actor, stack_id: int, *, name=None, description=None, slug=None
+) -> None:
     _require(perms.can(actor, perms.STACKS_MANAGE), ObjectError("admins only"))
     row = conn.execute("SELECT * FROM stacks WHERE id = ?", (stack_id,)).fetchone()
     _require(row is not None, ObjectError("no such stack"))
@@ -119,6 +121,17 @@ def edit_stack(conn, actor, stack_id: int, *, name=None, description=None) -> No
     if description is not None:
         sets.append("description = ?")
         args.append(_check_text(description))
+    if slug is not None:
+        slug = slug.strip()
+        _require(bool(SLUG_RE.match(slug or "")), SlugInvalid("bad slug"))
+        _require(
+            not conn.execute(
+                "SELECT 1 FROM stacks WHERE slug = ? AND id != ?", (slug, stack_id)
+            ).fetchone(),
+            SlugInvalid("slug already in use"),
+        )
+        sets.append("slug = ?")
+        args.append(slug)
     if sets:
         with conn:
             conn.execute(
@@ -207,6 +220,7 @@ def edit_project(
     name: str | None = None,
     description: str | None = None,
     stack_id: int | None = None,
+    slug: str | None = None,
 ) -> sqlite3.Row:
     proj = get_project(conn, project_id)
     _require(
@@ -223,12 +237,23 @@ def edit_project(
         or conn.execute("SELECT 1 FROM stacks WHERE id = ?", (stack_id,)).fetchone(),
         ObjectError("no such stack"),
     )
+    if slug is not None:
+        slug = slug.strip()
+        _require(bool(SLUG_RE.match(slug or "")), SlugInvalid("bad slug"))
+        _require(
+            not conn.execute(
+                "SELECT 1 FROM projects WHERE slug = ? AND id != ?",
+                (slug, project_id),
+            ).fetchone(),
+            SlugInvalid("slug already in use"),
+        )
     with conn:
         conn.execute(
             "UPDATE projects SET name = COALESCE(?, name),"
             " description = COALESCE(?, description),"
-            " stack_id = COALESCE(?, stack_id) WHERE id = ?",
-            (name, description, stack_id, project_id),
+            " stack_id = COALESCE(?, stack_id),"
+            " slug = COALESCE(?, slug) WHERE id = ?",
+            (name, description, stack_id, slug, project_id),
         )
     events.emit(
         conn,

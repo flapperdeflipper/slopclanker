@@ -781,6 +781,7 @@ async def api_stack_edit(request: Request) -> JSONResponse:
             int(request.path_params["sid"]),
             name=body.get("name"),
             description=body.get("description"),
+            slug=body.get("slug"),
         )
         row = conn.execute(
             "SELECT * FROM stacks WHERE id = ?", (int(request.path_params["sid"]),)
@@ -916,6 +917,7 @@ async def api_project_edit(request: Request) -> JSONResponse:
             name=data.get("name"),
             description=data.get("description"),
             stack_id=data.get("stack_id"),
+            slug=data.get("slug"),
         )
     except Exception as exc:  # noqa: BLE001 — typed mapping below
         return _svc_error(exc)

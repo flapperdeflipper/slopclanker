@@ -2,12 +2,20 @@
 All notable changes to this project will be documented in this file.
 
 
-## [Unreleased]
+## [1.4.2] — 2026-09-10
 
-- Removed the legacy 0.x archive (`docs/legacy-archive/`) and the
-  one-time cutover tooling (`export_legacy.py`, `cutover_seed.py`).
-  The legacy board was decommissioned at the v1 cutover; history
-  remains in git.
+- **Slugs are real now.** Project and stack routes accept slugs
+  (`#/project/my-slug/board`, `#/stack/my-stack/board`) — numeric ids
+  keep working — and the UI navigates by slug everywhere (tabs,
+  selectors, breadcrumbs, redirects). Unknown slugs get a clean
+  not-found card.
+- **Slugs are editable**: the Edit project / Edit stack modals have a
+  slug field (validated, uniqueness-checked, own slug allowed);
+  after a rename the URL follows the new slug.
+- **Favicon**: inline SVG alembic mark — no more 404/204 noise in
+  the logs, works through ingress and direct access.
+- Removed the legacy 0.x archive and one-time cutover tooling
+  (git history keeps them).
 
 ## [1.4.1] — 2026-09-10
 
