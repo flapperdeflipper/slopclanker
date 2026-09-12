@@ -18,6 +18,9 @@ Current surface (phases 1-2):
   - `scripts/agent_enroll.sh <base> <name> <token-file>` — end-to-end
     enrollment: registers, waits for approval, writes the token to a
     0600 file without ever printing it
+  - `scripts/redeem_code.sh <code> <token-file> [base]` — existing
+    identity / lost token: human redeems a re-issued one-time code
+    straight into the 0600 token file
   - `POST /api/auth/enroll` `{code}` — redeem a one-time enrollment code
   - `POST /api/auth/reenroll` `{name}` — key-loss: notifies admins
 - Humans: `POST /api/auth/login`, `GET /api/auth/whoami`,
