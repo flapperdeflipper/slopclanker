@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file.
 
 
+## [1.4.4] — 2026-09-12
+
+- New `scripts/redeem_code.sh`: the human-side half of the device flow
+  for an existing-but-tokenless clanker — re-issue a one-time code in
+  the web UI, run the script with it, and the agent token lands in a
+  0600 file. The code is typed by the human, the token is never
+  printed, and neither ever transits an agent context.
+
 ## [1.4.3] — 2026-09-10
 
 - **Custom selector dropdowns.** The header stack/project selectors are
